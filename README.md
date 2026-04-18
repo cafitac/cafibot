@@ -173,9 +173,13 @@ Priority: CLI flag > env var > `<cwd>/.hermit/settings.json` > `~/.hermit/settin
   "gateway_api_key": "hermit-mcp-…",
   "model": "glm-5.1",
   "response_language": "auto",
-  "compact_instructions": ""
+  "compact_instructions": "",
+  "ollama_max_loaded": 1,
+  "external_max_concurrent": 10
 }
 ```
+
+`ollama_max_loaded` is how many distinct models the gateway lets ollama hold in memory simultaneously — if a request targets a not-yet-loaded model while the budget is already full, the gateway returns **503** with `Retry-After` instead of letting ollama swap itself into an OOM. `external_max_concurrent` caps in-flight requests to external providers (z.ai, OpenAI, …); excess requests queue rather than fail. This is the replacement for the old `ollama-proxy` — the gateway itself is safe to expose (e.g. via ngrok).
 
 ## Architecture (short version)
 

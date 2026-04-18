@@ -41,6 +41,13 @@ DEFAULTS: dict[str, Any] = {
     "compact_instructions": "",
     "seed_handoff": True,
     "auto_wrap": True,
+    # Gateway admission control. `ollama_max_loaded` caps how many
+    # distinct models we allow ollama to hold in memory concurrently —
+    # a new chat request targeting an unloaded model past this budget
+    # is rejected fast rather than risking an OOM swap. External
+    # providers (z.ai, openai, …) queue instead of failing.
+    "ollama_max_loaded": 1,
+    "external_max_concurrent": 10,
 }
 
 _KNOWN_KEYS = set(DEFAULTS)
@@ -57,6 +64,8 @@ _ENV_MAP = {
     "HERMIT_COMPACT_INSTRUCTIONS": "compact_instructions",
     "HERMIT_SEED_HANDOFF": "seed_handoff",
     "HERMIT_AUTO_WRAP": "auto_wrap",
+    "HERMIT_OLLAMA_MAX_LOADED": "ollama_max_loaded",
+    "HERMIT_EXTERNAL_MAX_CONCURRENT": "external_max_concurrent",
 }
 
 
@@ -111,6 +120,16 @@ def load_settings(cwd: str | None = None) -> dict[str, Any]:
         val = settings.get(k)
         if isinstance(val, str):
             settings[k] = val.lower() not in {"0", "false", "no", "off"}
+
+    # 5. Coerce integer keys (env vars arrive as strings)
+    _INT_KEYS = {"ollama_max_loaded", "external_max_concurrent", "max_turns"}
+    for k in _INT_KEYS:
+        val = settings.get(k)
+        if isinstance(val, str):
+            try:
+                settings[k] = int(val)
+            except ValueError:
+                settings[k] = DEFAULTS[k]
 
     return settings
 

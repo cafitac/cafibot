@@ -8,10 +8,11 @@ import time
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..admission import AdmissionController, AdmissionDenied
 from ..auth import get_current_user
 from ..errors import ErrorCode, gateway_error
 from .._singletons import MAX_WORKERS
@@ -23,6 +24,22 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=MAX_WORKERS,
     thread_name_prefix="gateway-v1",
 )
+
+
+_admission: AdmissionController | None = None
+
+
+def _get_admission() -> AdmissionController:
+    global _admission
+    if _admission is None:
+        from ...config import load_settings
+        cfg = load_settings()
+        _admission = AdmissionController(
+            ollama_max_loaded=int(cfg.get("ollama_max_loaded", 1)),
+            external_max_concurrent=int(cfg.get("external_max_concurrent", 10)),
+            ollama_url=cfg.get("ollama_url", "http://localhost:11434/v1"),
+        )
+    return _admission
 
 
 
@@ -130,6 +147,19 @@ async def chat_completions(
 
     messages = [m.model_dump() for m in req.messages]
 
+    try:
+        token = await _get_admission().acquire(model)
+    except AdmissionDenied as denied:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": ErrorCode.SERVER_BUSY.value,
+                "message": str(denied),
+                "type": "gateway_error",
+            },
+            headers={"Retry-After": str(denied.retry_after)},
+        )
+
     if req.stream:
         return StreamingResponse(
             _stream_response(
@@ -138,6 +168,7 @@ async def chat_completions(
                 model=model,
                 messages=messages,
                 max_turns=max_turns,
+                admission_token=token,
             ),
             media_type="text/event-stream",
             headers={
@@ -148,11 +179,14 @@ async def chat_completions(
 
     # non-streaming
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        _EXECUTOR,
-        _run_agent_sync,
-        messages, model, req.temperature, max_turns,
-    )
+    try:
+        result = await loop.run_in_executor(
+            _EXECUTOR,
+            _run_agent_sync,
+            messages, model, req.temperature, max_turns,
+        )
+    finally:
+        token.release()
 
     content = result["content"]
     usage = result["usage"]
@@ -183,6 +217,7 @@ async def _stream_response(
     model: str,
     messages: list[dict],
     max_turns: int,
+    admission_token,
 ) -> AsyncGenerator[str, None]:
     """OpenAI-format SSE streaming. Runs AgentLoop in executor and splits the result into chunks."""
     loop = asyncio.get_running_loop()
@@ -197,6 +232,7 @@ async def _stream_response(
         usage = result["usage"]
     except Exception:
         logger.exception("v1 stream failed")
+        admission_token.release()
         err_chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -207,6 +243,8 @@ async def _stream_response(
         yield f"data: {json.dumps(err_chunk)}\n\n"
         yield "data: [DONE]\n\n"
         return
+    else:
+        admission_token.release()
 
     # Role chunk
     role_chunk = {
