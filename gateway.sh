@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# HermitAgent AI Gateway startup script
+# Usage:
+#   ./gateway.sh              # foreground (log to terminal)
+#   ./gateway.sh --daemon     # background (nohup)
+#   ./gateway.sh --stop       # Stop
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# ── Python path discovery ─────────────────────────────────────────────────
+# Override with HERMIT_VENV_DIR if your venv lives outside the project root.
+PYTHON=""
+for candidate in \
+    ".venv/bin/python" \
+    "${HERMIT_VENV_DIR:-}/bin/python" \
+    "$(which python3 2>/dev/null)" \
+    "$(which python 2>/dev/null)"; do
+    if [ -x "$candidate" ] && "$candidate" -c "import fastapi, uvicorn" 2>/dev/null; then
+        PYTHON="$candidate"
+        break
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: Cannot find Python with fastapi+uvicorn installed."
+    echo "  .venv/bin/python or pip install fastapi uvicorn"
+    exit 1
+fi
+
+# ── Settings ──────────────────────────────────────────────────────────────
+HOST="${HERMIT_GATEWAY_HOST:-0.0.0.0}"
+PORT="${HERMIT_GATEWAY_PORT:-8765}"
+LOG_DIR="$HOME/.hermit"
+LOG_FILE="$LOG_DIR/gateway.log"
+PID_FILE="$LOG_DIR/gateway.pid"
+
+mkdir -p "$LOG_DIR"
+
+# ── Command handling ──────────────────────────────────────────────────────
+case "${1:-}" in
+    --stop)
+        if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE")
+            if kill "$PID" 2>/dev/null; then
+                echo "Gateway stopped (PID $PID)"
+                rm -f "$PID_FILE"
+            else
+                echo "Gateway not running (stale PID $PID)"
+                rm -f "$PID_FILE"
+            fi
+        else
+            # No PID file; search for process
+            PID=$(ps aux | grep '[h]ermit_agent.gateway' | awk '{print $2}' | head -1)
+            if [ -n "$PID" ]; then
+                kill "$PID"
+                echo "Gateway stopped (PID $PID)"
+            else
+                echo "Gateway not running"
+            fi
+        fi
+        ;;
+
+    --daemon)
+        echo "Starting HermitAgent AI Gateway (daemon) on $HOST:$PORT ..."
+        echo "  Python: $PYTHON"
+        echo "  Log: $LOG_FILE"
+        nohup "$PYTHON" -m hermit_agent.gateway >> "$LOG_FILE" 2>&1 &
+        echo $! > "$PID_FILE"
+        sleep 2
+        if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "  PID: $(cat "$PID_FILE")"
+            echo "  Health: http://127.0.0.1:$PORT/health"
+            curl -s "http://127.0.0.1:$PORT/health" | python3 -m json.tool 2>/dev/null || true
+        else
+            echo "  ERROR: Gateway exited immediately. Check log:"
+            tail -5 "$LOG_FILE"
+            rm -f "$PID_FILE"
+            exit 1
+        fi
+        ;;
+
+    --status)
+        curl -s "http://127.0.0.1:$PORT/health" | python3 -m json.tool 2>/dev/null || echo "Gateway not responding"
+        ;;
+
+    *)
+        echo "Starting HermitAgent AI Gateway on $HOST:$PORT ..."
+        echo "  Python: $PYTHON"
+        echo "  Log: $LOG_FILE"
+        echo "  Health: http://127.0.0.1:$PORT/health"
+        echo ""
+        exec "$PYTHON" -m hermit_agent.gateway
+        ;;
+esac

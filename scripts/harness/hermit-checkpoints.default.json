@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "description": "CC ↔ HermitAgent workflow checkpoint policy. This file is intended for user customization.",
+    "spec_doc": ".dev/learner-spec.md (reference)",
+    "default_backup": "scripts/harness/hermit_agent-checkpoints.default.json",
+    "strategies": {
+      "aggressive": "CC handles 0/0.5/1 (interview) + 2.5 plan review + 4 final only. HermitAgent handles 1.5 patterns + 2 plan + 3 impl.",
+      "moderate": "CC handles 0/0.5/1 + 1.5 patterns + 2.5 plan review + 4 final. HermitAgent handles 2 plan + 3 impl.",
+      "conservative": "CC handles up to 2 plan. HermitAgent handles 3 impl only."
+    }
+  },
+
+  "feature-develop-hermit_agent": {
+    "default_strategy": "aggressive",
+    "model_strategy_map": {
+      "glm": "aggressive",
+      "claude": "aggressive",
+      "gpt": "aggressive",
+      "qwen3-coder": "moderate",
+      "qwen2.5-coder": "moderate",
+      "devstral": "moderate",
+      "gemma": "moderate",
+      "qwen3:8b": "conservative",
+      "qwen3:14b": "conservative"
+    },
+    "require_plan_approval": true,
+    "require_final_review": true,
+    "require_justification_in_plan": true
+  },
+
+  "code-apply-hermit_agent": {
+    "default_strategy": "aggressive",
+    "model_strategy_map": {
+      "qwen3:8b": "conservative"
+    },
+    "require_plan_approval": false,
+    "require_final_review": true,
+    "require_justification_in_plan": false
+  },
+
+  "code-push-hermit_agent": {
+    "default_strategy": "aggressive",
+    "model_strategy_map": {},
+    "require_plan_approval": false,
+    "require_final_review": true,
+    "require_justification_in_plan": false
+  },
+
+  "code-polish-hermit_agent": {
+    "default_strategy": "aggressive",
+    "model_strategy_map": {
+      "qwen3-coder": "moderate",
+      "qwen3:8b": "conservative"
+    },
+    "require_plan_approval": true,
+    "require_final_review": true,
+    "require_justification_in_plan": true
+  }
+}

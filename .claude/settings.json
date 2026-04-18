@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pytest)",
+      "Bash(pytest:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(./gateway.sh)",
+      "Bash(./mcp-server.sh)",
+      "Bash(./hermit_agent.sh:*)",
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git diff)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch)",
+      "Bash(git branch:*)",
+      "Bash(tail:*)",
+      "Read(./hermit_agent/**)",
+      "Read(./tests/**)",
+      "Read(./docs/**)",
+      "Read(./src/**)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.*.local)",
+      "Read(./**/credentials*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Bash(rm -rf /:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/block-dangerous-bash.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/block-during-hermit.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/python-syntax-check.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

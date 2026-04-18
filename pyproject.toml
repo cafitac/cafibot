@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermit-agent"
+version = "0.1.0"
+description = "Run Claude Code cheaper: a Python MCP sub-agent that delegates grunt work to local ollama or z.ai."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = [
+    "llm",
+    "coding-agent",
+    "claude-code",
+    "ollama",
+    "mcp",
+    "local-llm",
+    "ai-agent",
+    "developer-tools",
+]
+authors = [
+    { name = "HermitAgent Contributors" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "html2text",
+    "ddgs",
+    "httpx",
+    # mcp pin: the channel-notification path uses the private
+    # `ServerSession._write_stream.send(...)` attribute (see
+    # .omc/plans/bun-channel-merge.md ADR). Pin the major version until
+    # `tests/test_mcp_notification_wire.py` is confirmed on the next one.
+    "mcp>=1.27,<2.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "jinja2>=3.1.0",
+    "aiosqlite>=0.20.0",
+    "anyio>=4.0.0",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+ui = ["prompt_toolkit"]
+test = ["pytest>=8", "pyyaml"]
+
+[project.scripts]
+hermit = "hermit_agent.__main__:main"
+hermit-gateway = "hermit_agent.gateway.__main__:main"
+hermit-setup = "hermit_agent.cli_setup:main"
+
+[project.urls]
+Homepage = "https://github.com/cafitac/hermit-agent"
+Repository = "https://github.com/cafitac/hermit-agent"
+Issues = "https://github.com/cafitac/hermit-agent/issues"
+Documentation = "https://github.com/cafitac/hermit-agent#readme"
+
+[tool.setuptools.packages.find]
+include = ["hermit_agent*"]
+
+[tool.setuptools.package-data]
+"hermit_agent.gateway" = ["templates/*.html", "migrations/*.sql"]

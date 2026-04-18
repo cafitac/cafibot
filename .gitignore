@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+
+# Claude Code original source (reference only, managed separately).
+# Anchored to repo root so nested src/ directories (e.g. benchmark
+# starters) are not accidentally ignored.
+/src/
+claw-code-main/
+
+# OMC state
+.omc/
+
+# Harness audit snapshots (per-machine, contain personal paths)
+.harness/
+
+# Ralph / ralplan workflow artifacts
+progress.txt
+prd.json
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
+# macOS extended-attribute / resource-fork droppings
+.!*!*
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Claude Code local-only settings (shared settings .claude/settings.json, rules/, skills/, hooks/ are committed)
+.claude/settings.local.json
+
+# Sensitive information (never commit)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials*
+secrets*
+
+# Temporary files
+*.tmp
+*.log
+hermit_scratchpad/
+
+# Django test project
+django/
+
+# React test project
+react/
+node_modules/
+hermit-channel/node_modules/
+
+# HermitAgent runtime data
+.hermit/
+
+# DB files (runtime-generated)
+*.db
+*.db-shm
+*.db-wal
+
+# Temporary/local config files
+task_state.md
+claude_code_zai_env.sh
+
+# Subrepos (managed separately)
+hermes-agent/

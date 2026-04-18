@@ -1,0 +1,473 @@
+"""AgentSession — AgentLoop execution lifecycle defined with Template Method Pattern.
+
+Common flow: setup → prepare_prompt → execute → teardown
+  - SessionLogger, Learner, skill injection, and post-run stats are shared across all modes.
+  - Tool initialization, agent execution strategy, and error/completion notifications are implemented by subclasses.
+
+Implementations (3 types):
+  MCPAgentSession    — MCP server mode (background thread, channel notify, cancel event)
+  BridgeAgentSession — React+Ink UI mode (JSON messages, auto pytest+learn, KB update)
+  CLIAgentSession    — Direct terminal execution mode (synchronous, streaming)
+"""
+
+from __future__ import annotations
+
+import threading
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from .llm_client import LLMClientBase
+    from .loop import AgentLoop
+    from .permissions import PermissionMode
+
+
+class AgentSessionBase(ABC):
+    """Template Method: Skeleton for AgentLoop execution lifecycle.
+
+    Abstract methods that subclasses must implement:
+      _setup_tools()   — Tool initialization (differs per MCP/Bridge/CLI channel)
+      _execute()       — Agent execution strategy
+
+    Hook methods that subclasses may override:
+      _setup_permission_checker() — Replace the permission checker
+      _make_progress_hook()       — Return a progress hook
+      _on_success()               — Notification/post-processing on success
+      _on_error()                 — Notification/post-processing on error
+    """
+
+    def __init__(
+        self,
+        llm: "LLMClientBase",
+        cwd: str,
+        permission_mode: "PermissionMode",
+        max_turns: int = 200,
+        max_context_tokens: int = 32000,
+    ):
+        self.llm = llm
+        self.cwd = cwd
+        self.permission_mode = permission_mode
+        self.max_turns = max_turns
+        self.max_context_tokens = max_context_tokens
+
+        self._agent: "AgentLoop | None" = None
+        self._active_skill_names: list[str] = []
+
+    # ------------------------------------------------------------------
+    # Template method — external entry point
+    # ------------------------------------------------------------------
+
+    def run(self, task: str) -> str:
+        """Execute a task and return the result string."""
+        self._setup_agent()
+        self._setup_session_logger()
+        prompt = self._prepare_prompt(task)
+
+        result: str | None = None
+        succeeded: bool | None = None
+        try:
+            result = self._execute(prompt)
+            succeeded = True
+            self._on_success(result)
+            return result or ""
+        except Exception as e:
+            succeeded = False
+            self._on_error(e)
+            raise
+        finally:
+            self._schedule_teardown(succeeded)
+
+    # ------------------------------------------------------------------
+    # Common implementation — behaves identically across all subclasses
+    # ------------------------------------------------------------------
+
+    def _setup_agent(self) -> None:
+        """Common AgentLoop initialization."""
+        from .loop import AgentLoop
+        tools = self._setup_tools()
+        self._agent = AgentLoop(
+            llm=self.llm,
+            tools=tools,
+            cwd=self.cwd,
+            permission_mode=self.permission_mode,
+            max_context_tokens=self.max_context_tokens,
+            on_tool_result=self._make_progress_hook(),
+        )
+        self._agent.MAX_TURNS = self.max_turns
+        self._setup_permission_checker()
+
+    def _setup_session_logger(self) -> None:
+        """Inject SessionLogger into LLM + emitter."""
+        try:
+            from .session_logger import SessionLogger
+            logger = SessionLogger(cwd=self.cwd)
+            self.llm.session_logger = logger
+            if self._agent and hasattr(self._agent, "emitter"):
+                self._agent.emitter.session_logger = logger
+        except Exception:
+            pass
+
+    def _prepare_prompt(self, task: str) -> str:
+        """Inject learned-feedback skills before the task prompt."""
+        try:
+            from .learner import Learner
+            learner = Learner(llm=self.llm)
+            active_skills = learner.get_active_skills()
+            if active_skills:
+                self._active_skill_names = [name for name, _ in active_skills]
+                skill_block = "\n\n".join(f"### {name}\n{content}" for name, content in active_skills)
+                task = f"<learned_feedback>\n{skill_block}\n</learned_feedback>\n\n{task}"
+        except Exception:
+            pass
+        return task
+
+    def _schedule_teardown(self, succeeded: bool | None) -> None:
+        """Run verify_cmd + record_run in a background thread (independent of response time)."""
+        if not self._active_skill_names:
+            return
+
+        skill_names = list(self._active_skill_names)
+        cwd = self.cwd
+        llm = self.llm
+        _succeeded = succeeded
+
+        def _record():
+            try:
+                from .learner import Learner
+                learner = Learner(llm=llm)
+                verify_results = learner.run_verify_cmds(skill_names, cwd)
+                learner.record_run(skill_names, pytest_passed=_succeeded, verify_results=verify_results)
+            except Exception:
+                pass
+
+        threading.Thread(target=_record, daemon=True, name="agent-session-teardown").start()
+
+    # ------------------------------------------------------------------
+    # Abstract methods — must be implemented by subclasses
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def _setup_tools(self) -> list:
+        """Return tool list. Channel/queue configuration differs per mode."""
+
+    @abstractmethod
+    def _execute(self, prompt: str) -> str | None:
+        """Run the agent. Return result string."""
+
+    # ------------------------------------------------------------------
+    # Hook methods — override in subclasses as needed
+    # ------------------------------------------------------------------
+
+    def _setup_permission_checker(self) -> None:
+        """Default: use AgentLoop's built-in permission checker as-is."""
+
+    def _make_progress_hook(self):
+        """Default: no progress hook."""
+        return None
+
+    def _on_success(self, result: str | None) -> None:
+        """Post-processing on success. Default: do nothing."""
+
+    def _on_error(self, error: Exception) -> None:
+        """Post-processing on error. Default: do nothing."""
+
+
+# ---------------------------------------------------------------------------
+# Type 1: MCP mode
+# ---------------------------------------------------------------------------
+
+class MCPAgentSession(AgentSessionBase):
+    """AgentSession for MCP server mode.
+
+    Features:
+    - cancel_event: immediately interrupt LLM inference
+    - question_queue / reply_queue: bidirectional communication for ask_user_question
+    - MCPPermissionChecker: permission requests via MCP channel
+    - results/errors delivered via result_queue (caller handles via provided callbacks)
+    - progress hook: channel notifications keyed by task_id
+    """
+
+    def __init__(
+        self,
+        llm: "LLMClientBase",
+        cwd: str,
+        state,                              # _TaskState (question_queue, reply_queue, result_queue, cancel_event)
+        task_id: str,
+        notify_fn: Callable,                # (question, options) → None
+        notify_running_fn: Callable,        # () → None
+        make_progress_hook_fn: Callable,    # (task_id) → hook_fn (prevent circular imports)
+        notify_done_fn: Callable,           # (task_id, summary) → None
+        notify_error_fn: Callable,          # (task_id, message) → None
+        permission_checker=None,            # MCPPermissionChecker instance (DI, prevent circular imports)
+        max_turns: int = 200,
+    ):
+        from .permissions import PermissionMode
+        super().__init__(
+            llm=llm,
+            cwd=cwd,
+            permission_mode=PermissionMode.ACCEPT_EDITS,
+            max_turns=max_turns,
+            max_context_tokens=_infer_context_size(llm.model),
+        )
+        self._state = state
+        self._task_id = task_id
+        self._notify_fn = notify_fn
+        self._notify_running_fn = notify_running_fn
+        self._make_progress_hook_fn = make_progress_hook_fn
+        self._notify_done_fn = notify_done_fn
+        self._notify_error_fn = notify_error_fn
+        self._permission_checker = permission_checker
+        self._emitter_handler = None  # injected after _setup_agent (use set_emitter_handler)
+        llm._cancel_event = state.cancel_event
+
+    def _setup_tools(self) -> list:
+        from .tools import create_default_tools
+        return create_default_tools(
+            cwd=self.cwd,
+            llm_client=self.llm,
+            question_queue=self._state.question_queue,
+            reply_queue=self._state.reply_queue,
+            notify_fn=self._notify_fn,
+            notify_running_fn=self._notify_running_fn,
+        )
+
+    def _setup_permission_checker(self) -> None:
+        # MCPPermissionChecker is defined in mcp_server.py → DI to avoid circular import
+        if self._permission_checker is not None and self._agent is not None:
+            self._agent.permission_checker = self._permission_checker
+
+    def set_emitter_handler(self, handler) -> None:
+        """Set emitter event handler. Must be set before calling run()."""
+        self._emitter_handler = handler
+
+    def _setup_agent(self) -> None:
+        super()._setup_agent()
+        if self._emitter_handler is not None and self._agent is not None:
+            self._agent.emitter.set_handler(self._emitter_handler)
+
+    def _make_progress_hook(self):
+        return self._make_progress_hook_fn(self._task_id)
+
+    def _execute(self, prompt: str) -> str | None:
+        assert self._agent is not None
+        return self._agent.run(prompt)
+
+    def _on_success(self, result: str | None) -> None:
+        self._state.result = result or "[task complete]"
+        if self._agent is not None and hasattr(self._agent, "token_totals"):
+            self._state.token_totals = dict(self._agent.token_totals)
+        self._state.result_queue.put({
+            "status": "done",
+            "result": self._state.result,
+        })
+        self._notify_done_fn(
+            self._task_id,
+            result[:200].replace("\n", " ").strip() if result else None,
+        )
+
+    def _on_error(self, error: Exception) -> None:
+        error_msg = f"{type(error).__name__}: {error}"
+        self._state.result = error_msg
+        if self._agent is not None and hasattr(self._agent, "token_totals"):
+            self._state.token_totals = dict(self._agent.token_totals)
+        self._state.result_queue.put({
+            "status": "error",
+            "message": error_msg,
+        })
+        self._notify_error_fn(self._task_id, error_msg)
+
+
+# ---------------------------------------------------------------------------
+# Type 2: Bridge (React+Ink UI) mode
+# ---------------------------------------------------------------------------
+
+class BridgeAgentSession(AgentSessionBase):
+    """AgentSession for React+Ink UI (bridge.py) mode.
+
+    Features:
+    - Communicates with UI via JSON messages (_send_fn)
+    - After completion: auto pytest + Learner recording + KB update (_auto_pytest_and_learn)
+    - emitter event handler connection
+    """
+
+    def __init__(
+        self,
+        llm: "LLMClientBase",
+        cwd: str,
+        permission_mode: "PermissionMode",
+        send_fn: Callable,                  # Send JSON messages to UI
+        event_handler_fn: Callable | None = None,
+        max_turns: int = 100,
+        max_context_tokens: int = 32000,
+        streaming: bool = True,
+    ):
+        super().__init__(
+            llm=llm,
+            cwd=cwd,
+            permission_mode=permission_mode,
+            max_turns=max_turns,
+            max_context_tokens=max_context_tokens,
+        )
+        self._send_fn = send_fn
+        self._event_handler_fn = event_handler_fn
+        self._streaming = streaming
+
+    def _setup_tools(self) -> list:
+        from .tools import create_default_tools
+        return create_default_tools(cwd=self.cwd, llm_client=self.llm)
+
+    def _setup_agent(self) -> None:
+        super()._setup_agent()
+        assert self._agent is not None
+        self._agent.streaming = self._streaming
+        if self._event_handler_fn and hasattr(self._agent, "emitter"):
+            self._agent.emitter.set_handler(self._event_handler_fn)
+
+    def _execute(self, prompt: str) -> str | None:
+        assert self._agent is not None
+        return self._agent.run(prompt)
+
+    def _on_success(self, result: str | None) -> None:
+        """After completion: auto pytest + Learner + KB update."""
+        assert self._agent is not None
+        self._auto_pytest_and_learn(self._agent)
+
+    def _auto_pytest_and_learn(self, agent: "AgentLoop") -> None:
+        """Run pytest + record learnings after skill completion. Executed in background."""
+        def _run():
+            try:
+                from .learner import Learner
+                from .kb_learner import KBLearner
+                learner = Learner(llm=agent.llm)
+                active_skills = [name for name, _ in learner.get_active_skills()]
+
+                passed, output = _run_pytest(agent.cwd)
+
+                if active_skills:
+                    learner.record_run(active_skills, passed)
+
+                status = "✓ passed" if passed else "✗ failed"
+                print(f"\n\033[35m  [Learner] pytest {status}\033[0m")
+
+                if not passed and learner.llm:
+                    skill_data = learner.extract_from_failure(agent.messages, output)
+                    if skill_data:
+                        path = learner.save_pending(skill_data)
+                        if path:
+                            print(f"\033[35m  [Learner] saved improvement rule to pending: {skill_data['name']}\033[0m")
+
+                try:
+                    kb = KBLearner(cwd=agent.cwd, llm=agent.llm)
+                    kb.post_task_update(agent.messages, passed)
+                except Exception as kb_err:
+                    print(f"\033[33m  [KB] error: {kb_err}\033[0m")
+
+            except Exception as e:
+                print(f"\033[33m  [Learner] error: {e}\033[0m")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Type 3: Direct CLI terminal execution mode
+# ---------------------------------------------------------------------------
+
+class CLIAgentSession(AgentSessionBase):
+    """AgentSession for direct CLI terminal execution mode.
+
+    Features:
+    - Synchronous execution (direct call, blocking)
+    - Optional CLIChannel connection (--channel cli flag)
+    - streaming: uses AgentLoop streaming mode
+    - Self-learning included (verify_cmd only, no pytest unlike BridgeAgentSession)
+    """
+
+    def __init__(
+        self,
+        llm: "LLMClientBase",
+        cwd: str,
+        permission_mode: "PermissionMode",
+        channel=None,               # CLIChannel | None
+        max_turns: int = 50,
+        max_context_tokens: int = 32000,
+        streaming: bool = True,
+    ):
+        super().__init__(
+            llm=llm,
+            cwd=cwd,
+            permission_mode=permission_mode,
+            max_turns=max_turns,
+            max_context_tokens=max_context_tokens,
+        )
+        self._channel = channel
+        self._streaming = streaming
+
+    def _setup_tools(self) -> list:
+        from .tools import create_default_tools
+        kwargs: dict = {}
+        if self._channel is not None:
+            kwargs["question_queue"] = self._channel.question_queue
+            kwargs["reply_queue"] = self._channel.reply_queue
+        return create_default_tools(cwd=self.cwd, llm_client=self.llm, **kwargs)
+
+    def _setup_agent(self) -> None:
+        super()._setup_agent()
+        assert self._agent is not None
+        self._agent.streaming = self._streaming
+
+    def _make_progress_hook(self):
+        if self._channel is not None:
+            return self._channel.make_progress_hook()
+        return None
+
+    def _execute(self, prompt: str) -> str | None:
+        assert self._agent is not None
+        return self._agent.run(prompt)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _infer_context_size(model: str) -> int:
+    """Estimate context window size from model name."""
+    m = model.lower()
+    if "glm" in m:
+        return 65536
+    if "qwen3" in m:
+        if "64k" in m:
+            return 65536
+        return 32768
+    if "devstral" in m:
+        if "64k" in m:
+            return 65536
+        if "128k" in m:
+            return 131072
+        return 32768
+    return 32000
+
+
+def _run_pytest(cwd: str) -> tuple[bool, str]:
+    """Run .venv/bin/pytest in cwd. Returns (passed, output)."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    venv_pytest = None
+    for root in [cwd] + [str(p) for p in Path(cwd).parents]:
+        candidate = os.path.join(root, ".venv", "bin", "pytest")
+        if os.path.exists(candidate):
+            venv_pytest = candidate
+            break
+
+    if not venv_pytest:
+        return False, "pytest not found"
+
+    try:
+        result = subprocess.run(
+            [venv_pytest, "-x", "-q", "--tb=short"],
+            cwd=cwd, capture_output=True, text=True, timeout=120,
+        )
+        return result.returncode == 0, result.stdout + result.stderr
+    except Exception as e:
+        return False, str(e)

@@ -1,0 +1,304 @@
+"""HermitAgent Bridge — Gateway HTTP client mode.
+
+Communicates with React+Ink UI via JSON protocol. All execution routes through the gateway (localhost:8765).
+
+Environment variables:
+  HERMIT_GATEWAY_URL     Gateway URL (default: http://localhost:8765)
+  HERMIT_GATEWAY_API_KEY Gateway API key (required)
+
+Protocol:
+  UI → Python (stdin):
+    {"type":"user_input","text":"..."}
+    {"type":"interrupt"}
+    {"type":"quit"}
+    {"type":"permission_response","choice":"yes"|"no"|"always"}
+    {"type":"permission_mode","mode":"yolo"}
+
+  Python → UI (stdout):
+    {"type":"ready","model":"...","session_id":"gateway",...}
+    {"type":"streaming","token":"A"}
+    {"type":"stream_end"}
+    {"type":"text","content":"..."}
+    {"type":"tool_use","name":"bash","detail":"ls -la","ts":...}
+    {"type":"tool_result","content":"...","is_error":false,"ts":...}
+    {"type":"status","turns":5,"ctx_pct":42,...}
+    {"type":"done"}
+    {"type":"error","message":"..."}
+    {"type":"permission_ask","tool":"bash","summary":"...","options":[...]}"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import sys
+import threading
+import time
+import warnings
+
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=ResourceWarning)
+
+_real_stdout = sys.__stdout__
+
+try:
+    from .loop import VERSION
+except Exception:
+    VERSION = "0.0.0"
+
+
+def _send(msg: dict) -> None:
+    """Send JSON message to UI. Always uses the original stdout."""
+    _real_stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    _real_stdout.flush()
+
+
+def _dispatch_sse_to_tui(event: dict) -> None:
+    """Convert SSE event dict → TUI JSON protocol and send."""
+    t = event.get("type")
+    if t == "streaming":
+        _send({"type": "streaming", "token": event.get("token", "")})
+    elif t == "stream_end":
+        _send({"type": "stream_end"})
+    elif t == "tool_use":
+        _send({
+            "type": "tool_use",
+            "name": event.get("tool_name", ""),
+            "detail": event.get("detail", ""),
+            "ts": time.time(),
+        })
+    elif t == "tool_result":
+        _send({
+            "type": "tool_result",
+            "content": event.get("content", ""),
+            "is_error": event.get("is_error", False),
+            "ts": time.time(),
+        })
+    elif t == "status":
+        fields = {k: v for k, v in event.items() if k not in ("type", "_source")}
+        _send({"type": "status", **fields})
+    elif t == "model_changed":
+        _send({
+            "type": "model_changed",
+            "old_model": event.get("old_model", ""),
+            "new_model": event.get("new_model", ""),
+        })
+    elif t == "waiting":
+        # ask_user_question → reuse TUI permission_ask UI (tool="ask" → free-text input)
+        _send({
+            "type": "permission_ask",
+            "tool": "ask",
+            "summary": event.get("question", ""),
+            "options": event.get("options", []),
+        })
+    elif t == "permission_ask":
+        # bash permission request
+        _send({
+            "type": "permission_ask",
+            "tool": event.get("tool_name", "bash"),
+            "summary": event.get("question", ""),
+            "options": event.get("options", []),
+        })
+    elif t == "progress":
+        _send({"type": "tool_result", "content": event.get("message", ""), "is_error": False})
+    elif t == "error":
+        _send({"type": "error", "message": event.get("message", "")})
+    # done/cancelled/error terminators are handled in the _run_gateway_mode main loop
+
+
+def _run_gateway_mode(args: argparse.Namespace) -> None:
+    """Main loop for Gateway HTTP client mode."""
+    from .bridge_client import GatewayClient
+
+    client = GatewayClient(base_url=args.gateway_url, api_key=args.gateway_api_key)
+
+    if not client.check_gateway():
+        _send({"type": "error", "message": f"Gateway connection failed: {args.gateway_url}"})
+        _send({"type": "done"})
+        return
+
+    # Load slash commands + skill list (for TUI autocomplete)
+    commands: dict[str, str] = {}
+    try:
+        from .loop import SLASH_COMMANDS
+        commands = {f"/{k}": v["description"] for k, v in sorted(SLASH_COMMANDS.items())}
+    except Exception:
+        pass
+    try:
+        from .skills import SkillRegistry
+        registry = SkillRegistry()
+        for skill in registry.list_skills():
+            key = f"/{skill.name}"
+            if key not in commands:
+                commands[key] = f"[skill] {skill.description}"
+    except Exception:
+        pass
+
+    _send({
+        "type": "ready",
+        "model": args.model,
+        "session_id": "gateway",
+        "cwd": args.cwd,
+        "permission": "accept_edits",
+        "version": VERSION,
+        "commands": commands,
+    })
+
+    msg_queue: queue.Queue = queue.Queue()
+    current_task_id: str | None = None
+    # Create a new Event per task → prevent shutdown race
+    sse_shutdown: threading.Event = threading.Event()
+
+
+    def _stdin_reader() -> None:
+        for raw_line in sys.stdin:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                msg_queue.put(json.loads(raw_line))
+            except json.JSONDecodeError:
+                continue
+
+    def _sse_reader(task_id: str) -> None:
+        for event in client.stream_events(task_id, sse_shutdown):
+            msg_queue.put({"_source": "sse", **event})
+            if event.get("type") in ("done", "error", "cancelled"):
+                break
+
+    stdin_thread = threading.Thread(target=_stdin_reader, daemon=True)
+    stdin_thread.start()
+
+    while True:
+        try:
+            msg = msg_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+
+        # Handle SSE events
+        if msg.get("_source") == "sse":
+            t = msg.get("type")
+            if t == "done":
+                # done SSE result field → TUI text event (final response)
+                result_text = (msg.get("result") or "").strip()
+                if result_text:
+                    _send({"type": "text", "content": result_text})
+                _send({"type": "stream_end"})
+                current_task_id = None
+                _send({"type": "done"})
+            elif t in ("error", "cancelled"):
+                _dispatch_sse_to_tui(msg)
+                current_task_id = None
+                _send({"type": "done"})
+            else:
+                _dispatch_sse_to_tui(msg)
+            continue
+
+        # Handle stdin messages
+        msg_type = msg.get("type", "")
+
+        if msg_type == "quit":
+            if current_task_id:
+                client.cancel(current_task_id)
+            client.close()
+            _send({"type": "done"})
+            break
+
+        elif msg_type == "interrupt":
+            if current_task_id:
+                sse_shutdown.set()
+                client.close_stream()
+                client.cancel(current_task_id)
+                current_task_id = None
+            _send({"type": "done"})
+
+        elif msg_type == "permission_response":
+            if current_task_id:
+                choice = msg.get("choice", "no")
+                client.reply(current_task_id, choice)
+
+        elif msg_type == "permission_mode":
+            # In gateway mode, permission_mode changes cannot be forwarded via reply
+            # Only update the mode display
+            mode_str = msg.get("mode", "accept_edits")
+            _send({"type": "status", "permission": mode_str})
+
+        elif msg_type == "user_input":
+            text = msg.get("text", "").strip()
+            if not text:
+                continue
+
+            # user_input in waiting state → processed as reply
+            if current_task_id:
+                client.reply(current_task_id, text)
+                continue
+
+            # Create task (including slash commands — handled by gateway)
+            try:
+                resp = client._client.post(
+                    f"{client.base_url}/tasks",
+                    json={"task": text, "cwd": args.cwd, "model": args.model, "max_turns": args.max_turns},
+                    headers=client._headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                _send({"type": "error", "message": f"Task creation failed: {e}"})
+                _send({"type": "done"})
+                continue
+
+            # Immediately processed commands (e.g., slash commands)
+            if data.get("status") == "done" and data.get("task_id") == "instant":
+                result = (data.get("result") or "").strip()
+                if result:
+                    _send({"type": "text", "content": result})
+                _send({"type": "done"})
+                continue
+
+            task_id = data["task_id"]
+            current_task_id = task_id
+            # Create a new Event for each task. Reasons for not reusing the previous Event:
+            # Sharing the same Event while the previous reader is shutting down causes a false early-exit.
+            # The previous reader naturally exits upon receiving done/error/cancelled,
+            # and the GC cleans up the previous Event.
+            sse_shutdown = threading.Event()
+
+            sse_thread = threading.Thread(target=_sse_reader, args=(task_id,), daemon=True)
+            sse_thread.start()
+
+
+def main() -> None:
+    # Parse cwd first (required to load project-local settings.json)
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--cwd", default=os.getcwd())
+    pre_args, _ = pre.parse_known_args()
+
+    from .config import load_settings
+    cfg = load_settings(cwd=pre_args.cwd)
+
+    parser = argparse.ArgumentParser(description="HermitAgent Bridge — Gateway HTTP client")
+    parser.add_argument("--model", default=cfg["model"])
+    parser.add_argument("--cwd", default=pre_args.cwd)
+    parser.add_argument("--max-turns", type=int, default=cfg["max_turns"])
+    parser.add_argument("--gateway-url", default=cfg["gateway_url"])
+    parser.add_argument("--gateway-api-key", default=cfg["gateway_api_key"])
+    # Legacy TUI compatibility — ignored arguments
+    parser.add_argument("--base-url", default=None)
+    parser.add_argument("--yolo", action="store_true")
+    parser.add_argument("--max-context", type=int, default=None)
+    args = parser.parse_args()
+
+    if not args.gateway_url or not args.gateway_api_key:
+        sys.stderr.write(
+            "ERROR: gateway_url and gateway_api_key are required.\n"
+            "Configure them in ~/.hermit/settings.json or .hermit/settings.json,\n"
+            "or set environment variables HERMIT_GATEWAY_URL / HERMIT_GATEWAY_API_KEY.\n"
+        )
+        sys.exit(1)
+
+    _run_gateway_mode(args)
+
+
+if __name__ == "__main__":
+    main()

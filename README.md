@@ -1,0 +1,181 @@
+# HermitAgent
+
+> **Run Claude Code 50–80% cheaper by letting local ollama or z.ai handle the grunt work while Claude stays the orchestrator.**
+
+HermitAgent plugs into Claude Code as an MCP sub-agent. Claude keeps doing what it is best at — planning, interviewing, code review — and delegates the high-token grunt work (file edits, test runs, commit/push, refactors) to a cheap executor (ollama on your laptop, or a flat-rate z.ai subscription).
+
+```
+┌──────────────┐   MCP   ┌──────────────┐   any OpenAI-compatible   ┌───────┐
+│  Claude Code │ ──────▶ │  HermitAgent │ ────────────────────────▶ │  LLM  │
+│ (planner)    │         │  (executor)  │                           └───────┘
+└──────────────┘         └──────────────┘
+     $$$                      ~$0 / flat-rate
+```
+
+## Why
+
+Claude Code is great, but a `/feature-develop` session easily burns 100k+ Claude tokens on mechanical work — reading files, running `pytest`, formatting diffs, writing conventional-commit messages — that any competent code model can do. HermitAgent exposes three MCP tools (`run_task`, `reply_task`, `check_task`) so Claude Code can delegate whole skills to a cheaper model while the user stays in the familiar Claude Code UI.
+
+## The pattern
+
+![demo](assets/demo.gif)
+
+## How much it actually saves
+
+**Measured numbers live under [`benchmarks/results/`](benchmarks/results/)** — each file is one independent run pair.
+
+We deliberately don't publish a single marketing percentage here. Savings depend on the task, the repo, and the executor you choose; a headline number without that context is noise. If you want a reproducible datapoint:
+
+1. `cp -r benchmarks/todo-api/starter /tmp/cc-run && cp -r benchmarks/todo-api/starter /tmp/cc-hermit-run`
+2. Run `/feature-develop <task>` in one, `/feature-develop-hermit <task>` in the other (task spec: [`benchmarks/todo-api/TASK.md`](benchmarks/todo-api/TASK.md)).
+3. Feed the two Claude Code session logs into [`scripts/measure-savings.sh`](scripts/measure-savings.sh) — it prints a markdown table you can paste into `benchmarks/results/`.
+
+Full protocol: [`docs/measure-savings.md`](docs/measure-savings.md). Executor cost is treated as \$0 (ollama = free, z.ai / GLM = flat-rate); what we compare is Claude-side tokens and USD.
+
+## What it gives you
+
+The product is the **pattern**, not any specific skill:
+
+> Claude does reasoning, judgment, and quality gates.
+> A cheap local / flat-rate executor does the grunt work.
+> They talk to each other over MCP, so the switch is one word in a slash command.
+
+The repo ships this pattern as four **example** skills under `.claude/commands/` so you can see it in action and fork them into whatever workflow you already have:
+
+- `/feature-develop-hermit` — Claude interviews, Hermit implements and tests
+- `/code-apply-hermit` — Claude reads the PR review, Hermit applies every line
+- `/code-polish-hermit` — Claude picks what to polish, Hermit runs the lint/test loop
+- `/code-push-hermit` — Claude writes the PR description, Hermit does the commit/push
+
+These are **reference implementations**, tuned for the author's own workflow (GitHub PR-centric). The goal is for Claude to stay on the "small Claude tokens, big quality impact" work — interviews, review, final verification — and for everything high-volume / mechanical (Read × N, Edit × N, Bash/pytest loops, commit message writing) to land on Hermit. Write your own `-hermit` variant for the skills you actually live in; the [docs/hermit-variants.md](docs/hermit-variants.md) "add your own" recipe is a few steps.
+
+Everything else in the repo is there to make that pattern work cleanly:
+
+- **MCP server** (`run_task` / `reply_task` / `check_task`) with bidirectional conversation — Hermit can ask Claude mid-task
+- **Skill compatibility** — same `SKILL.md` format and YAML frontmatter as Claude Code; skills under `~/.claude/skills/` are shared read-only
+- **Progressive-disclosure rule system** — foundational rules stay auto-injected, contextual rules are on-demand skills (cuts session prefix from ~12k to ~3k tokens)
+- **Gateway** (FastAPI + SSE) in front of the executor LLM — 429 fail-fast + failover, cache hints, dashboard at `:8765`
+- **Model routing by name** — `qwen3-coder:30b` → local ollama, `glm-5.1` → z.ai, everything else → your configured endpoint
+- **Permission floor** — `.env`, `*.pem`, `*.key`, `credentials*` blocked across every mode (even YOLO)
+- **Self-learning skills** with model-aware lifecycles (validated-on models, 30-day auto-deprecation, `needs_review` on model swap)
+- **Optional standalone TUI** (React + Ink) for when you want to use Hermit without Claude Code in the loop
+
+## How is this different from …?
+
+| Project | Pattern | Trade-off |
+|---|---|---|
+| **claude-code-router** | Redirects all CC traffic to another provider | You lose Claude quality; the "Claude Code" session is really the local model |
+| **LiteLLM** | Generic multi-provider proxy | Not coding-specific, no understanding of CC workflow |
+| **OpenHands / aider** | Standalone agent, replaces Claude Code | Full migration away from CC; big UX change |
+| **Anthropic Agent SDK** | Official sub-agent framework | DIY: you still write the executor, the local-model wiring, the MCP glue |
+| **HermitAgent** | Claude **stays** the orchestrator; Hermit is the executor | Narrower scope, but drop-in: `/foo` → `/foo-hermit` |
+
+If you don't use Claude Code, you don't need HermitAgent. If you do, and the monthly bill or the rate limits are a problem, this is what it is for.
+
+### Where the project is heading
+
+The bundled skills still give Claude the full interview phase before delegating. The direction this project is moving in is the opposite: **Claude does only the final verification pass** — the executor does the interview, the plan, the implementation, the tests, the commit — and Claude is only woken up at the end to reject, accept, or ask for a narrow revision. The less Claude does, the more of the bill disappears. The existing `-hermit` skills are the conservative checkpoint on that spectrum; your own variants can push further.
+
+## Install
+
+```bash
+git clone https://github.com/cafitac/hermit-agent.git
+cd hermit-agent
+./install.sh          # venv + deps + default ~/.hermit/settings.json
+```
+
+Pick at least one executor:
+
+```bash
+# Option A — local ollama, $0
+brew install ollama && ollama pull qwen3-coder:30b
+# (install.sh will prompt to run this for you)
+
+# Option B — z.ai Coding Plan (flat-rate)
+# Paste your key into ~/.hermit/settings.json:
+#   {"model": "glm-5.1", "gateway_api_key": "hermit-mcp-..."}
+```
+
+See [docs/cc-setup.md](docs/cc-setup.md) for the full Claude Code MCP registration flow (minting the gateway API key, editing `~/.claude.json`, loading the dev channel).
+
+## Quick start — CC + Hermit (the recommended shape)
+
+```bash
+./gateway.sh --daemon         # executor LLM relay, :8765
+./mcp-server.sh               # MCP stdio — register this in ~/.claude/settings.json
+```
+
+Then in Claude Code:
+
+```
+/feature-develop-hermit <ticket-or-short-task>
+```
+
+Claude interviews you about the ticket, writes the plan, and delegates the implementation to Hermit over MCP. You watch Hermit's progress in the Claude Code session; the executor tokens never hit your Claude bill.
+
+### Standalone (no Claude Code)
+
+```bash
+./hermit.sh "fix the flaky test in tests/test_api.py"   # one-shot CLI
+./hermit.sh                                              # TUI (needs HERMIT_UI_DIR)
+```
+
+### Configuration
+
+Priority: CLI flag > env var > `<cwd>/.hermit/settings.json` > `~/.hermit/settings.json` > defaults.
+
+```json
+{
+  "gateway_url": "http://localhost:8765",
+  "gateway_api_key": "hermit-mcp-…",
+  "model": "glm-5.1",
+  "response_language": "auto",
+  "compact_instructions": ""
+}
+```
+
+## Architecture (short version)
+
+- **AgentLoop** — LLM turn, tool call, result, compact when context fills
+- **Gateway** — FastAPI layer in front of the executor. Classifier, routing, failover, web dashboard
+- **MCP server** — exposes `run_task` / `reply_task` / `check_task` / `cancel_task` for Claude Code
+- **Channel notifications** — `notifications/claude/channel` frames emitted inline by the Python MCP server; Claude Code renders them as `<channel source="hermit-channel">` blocks
+- **Skills** — markdown with YAML frontmatter, hot-loaded at session start, compatible with `~/.claude/skills/`
+
+## Layout
+
+```
+hermit_agent/                # agent, loop, tools, gateway, MCP, skills
+.claude/                     # this repo's own Claude Code config
+scripts/harness/             # harness tooling (cc-learner.py, etc.)
+tests/                       # pytest suite
+```
+
+## Status
+
+Early, working, single-author. MIT. No release cadence. No roadmap promises. Clone, read the code, open an issue if something is broken.
+
+## Running tests
+
+```bash
+pytest    # conftest.py auto-excludes ollama-dependent tests
+```
+
+## Boundaries
+
+- Hermit does not modify `~/.claude/` — it only reads `~/.claude/skills/` for cross-tool skill reuse
+- Hermit does not require Claude Code; it just shines brightest as its sub-agent
+- Nothing phones home. Everything runs locally or through the LLM endpoint you configure
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## See also
+
+- **[docs/cc-setup.md](docs/cc-setup.md)** — registering Hermit as a Claude Code MCP sub-agent
+- **[docs/hermit-variants.md](docs/hermit-variants.md)** — the `-hermit` skill family in detail
+- **[docs/measure-savings.md](docs/measure-savings.md)** — cost-savings measurement protocol
+- **[benchmarks/](benchmarks/)** — reproducible task specs and community datapoints
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution guide
+- [.dev/](.dev/) — internal design notes

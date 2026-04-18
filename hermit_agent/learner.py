@@ -1,0 +1,723 @@
+"""Learner — automatic skill creation, validation, performance tracking, and auto-deprecation.
+
+Pipeline:
+  execution complete → pytest auto-run → pattern extraction → save as pending
+           → promoted to approved on pytest pass
+           → success/fail counter updated on each use
+           → success_rate < threshold → auto-moved to deprecated
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+LEARNED_FEEDBACK_DIR = os.path.expanduser("~/.hermit/skills/learned-feedback")
+PENDING_DIR = os.path.join(LEARNED_FEEDBACK_DIR, "pending")
+APPROVED_DIR = os.path.join(LEARNED_FEEDBACK_DIR, "approved")
+DEPRECATED_DIR = os.path.join(LEARNED_FEEDBACK_DIR, "deprecated")
+AUTO_LEARNED_DIR = os.path.expanduser("~/.hermit/skills/auto-learned")
+
+# Deprecation criteria
+MIN_USES_BEFORE_EVAL = 5   # evaluate success_rate only after N or more uses
+DEPRECATE_THRESHOLD = 0.4  # auto-deprecate if success_rate falls below this
+UNUSED_DAYS_THRESHOLD = 30 # archive if unused for this many days
+
+
+# ---------------------------------------------------------------------------
+# Metadata schema
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SkillMeta:
+    """Skill performance metadata."""
+    name: str
+    description: str
+    triggers: list[str] = field(default_factory=list)
+    scope: list[str] = field(default_factory=list)  # file path / app pattern
+    status: str = "pending"                          # pending | approved | deprecated
+    created_at: str = ""
+    last_used: str = ""
+    use_count: int = 0
+    success_count: int = 0
+    fail_count: int = 0
+    missed_count: int = 0      # times trigger matched but LLM did not actually follow the skill
+    needs_review: bool = False # flag indicating improvement needed (pre-deprecation stage)
+    verify_cmd: str = ""       # bash command to verify success (exit 0 = verification passed)
+
+    @property
+    def success_rate(self) -> float:
+        total = self.success_count + self.fail_count
+        return self.success_count / total if total > 0 else 0.0
+
+    def to_frontmatter(self) -> str:
+        triggers_yaml = json.dumps(self.triggers)
+        scope_yaml = json.dumps(self.scope)
+        return (
+            f"name: {self.name}\n"
+            f"description: {self.description}\n"
+            f"type: learned-feedback\n"
+            f"status: {self.status}\n"
+            f"triggers: {triggers_yaml}\n"
+            f"scope: {scope_yaml}\n"
+            f"created_at: {self.created_at}\n"
+            f"last_used: {self.last_used}\n"
+            f"use_count: {self.use_count}\n"
+            f"success_count: {self.success_count}\n"
+            f"fail_count: {self.fail_count}\n"
+            f"success_rate: {self.success_rate:.2f}\n"
+            f"missed_count: {self.missed_count}\n"
+            f"needs_review: {str(self.needs_review).lower()}\n"
+            f"verify_cmd: {self.verify_cmd}\n"
+        )
+
+    @classmethod
+    def from_frontmatter(cls, meta: dict) -> "SkillMeta":
+        triggers = meta.get("triggers", [])
+        if isinstance(triggers, str):
+            try:
+                triggers = json.loads(triggers)
+            except Exception:
+                triggers = [t.strip() for t in triggers.split(",") if t.strip()]
+        scope = meta.get("scope", [])
+        if isinstance(scope, str):
+            try:
+                scope = json.loads(scope)
+            except Exception:
+                scope = [s.strip() for s in scope.split(",") if s.strip()]
+        needs_review_raw = meta.get("needs_review", "false")
+        needs_review = (
+            needs_review_raw is True
+            or str(needs_review_raw).lower() == "true"
+        )
+        return cls(
+            name=meta.get("name", ""),
+            description=meta.get("description", ""),
+            triggers=triggers,
+            scope=scope,
+            status=meta.get("status", "pending"),
+            created_at=meta.get("created_at", ""),
+            last_used=meta.get("last_used", ""),
+            use_count=int(meta.get("use_count", 0)),
+            success_count=int(meta.get("success_count", 0)),
+            fail_count=int(meta.get("fail_count", 0)),
+            missed_count=int(meta.get("missed_count", 0)),
+            needs_review=needs_review,
+            verify_cmd=meta.get("verify_cmd", ""),
+        )
+
+
+# ---------------------------------------------------------------------------
+# File I/O helpers
+# ---------------------------------------------------------------------------
+
+def _parse_skill_file(path: str) -> tuple[SkillMeta, str] | None:
+    """Parse YAML frontmatter + body. Returns (meta, body)."""
+    try:
+        text = Path(path).read_text()
+        match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", text, re.DOTALL)
+        if not match:
+            return None
+        fm_str, body = match.groups()
+        meta: dict = {}
+        for line in fm_str.splitlines():
+            if ":" in line:
+                k, _, v = line.partition(":")
+                meta[k.strip()] = v.strip()
+        return SkillMeta.from_frontmatter(meta), body.strip()
+    except Exception:
+        return None
+
+
+def _write_skill_file(path: str, meta: SkillMeta, body: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(f"---\n{meta.to_frontmatter()}---\n\n{body}\n")
+
+
+def _skill_path(status: str, name: str) -> str:
+    dirs = {"pending": PENDING_DIR, "approved": APPROVED_DIR, "deprecated": DEPRECATED_DIR}
+    return os.path.join(dirs.get(status, APPROVED_DIR), f"{name}.md")
+
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+_VERIFY_RULES_PATH = os.path.expanduser("~/.hermit/skills/verify-rules.json")
+
+
+def _load_verify_rules() -> dict:
+    """Load verify-rules.json. Returns an empty dict if missing or parse fails."""
+    try:
+        with open(_VERIFY_RULES_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _add_hub_backlink(skill_path: str, hub_name: str) -> None:
+    """Append a hub back-link to the bottom of a skill file. Skip if already present."""
+    hub_labels = {
+        "_hub_auto": "Auto-Learning Hub",
+        "_hub_approved": "Approved Feedback",
+        "_hub_feedback": "Manual Feedback",
+        "_hub_skills": "Core Skills",
+        "_hub_standards": "Code Standards",
+    }
+    link = f"[[{hub_name}|{hub_labels.get(hub_name, hub_name)}]]"
+    try:
+        content = Path(skill_path).read_text()
+        if link in content:
+            return
+        Path(skill_path).write_text(content.rstrip() + f"\n\n---\n← {link}\n")
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Core class
+# ---------------------------------------------------------------------------
+
+class Learner:
+    """Skill lifecycle manager.
+
+    pending  → (pytest passes) → approved → (tracked during use) → deprecated
+    """
+
+    def __init__(self, llm=None):
+        self.llm = llm
+        for d in (PENDING_DIR, APPROVED_DIR, DEPRECATED_DIR, AUTO_LEARNED_DIR):
+            os.makedirs(d, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Skill extraction (LLM-based)
+    # ------------------------------------------------------------------
+
+    def extract_from_failure(self, messages: list[dict], pytest_output: str) -> dict | None:
+        """Extract an improvement rule from pytest failure output and conversation history."""
+        if not self.llm:
+            return None
+
+        prompt = f"""You are analyzing a coding agent's failed task.
+
+pytest output:
+{pytest_output[:3000]}
+
+Based on the failure, extract ONE concrete rule the agent should follow next time.
+
+Respond as JSON:
+{{
+  "name": "snake_case_rule_name",
+  "description": "one-line description",
+  "triggers": ["keyword1", "keyword2"],
+  "scope": ["app_name_or_file_pattern"],
+  "rule": "The actual rule in imperative form. Be specific with file paths and commands.",
+  "why": "Why this rule prevents the failure",
+  "bad_pattern": "What the agent did wrong",
+  "good_pattern": "What the agent should do instead",
+  "verify_cmd": "bash command to verify the agent followed this rule after task completion (exit 0 = success). Use empty string if not applicable. Example: 'git log --oneline -1 | grep -q .' to verify a commit was made."
+}}
+
+If no clear rule can be extracted, respond: NONE"""
+
+        try:
+            response = self.llm.chat([{"role": "user", "content": prompt}])
+            text = response.content.strip() if hasattr(response, "content") else str(response).strip()
+            if text == "NONE" or not text:
+                return None
+            if text.startswith("```"):
+                lines = text.splitlines()
+                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            data = json.loads(text)
+            required = {"name", "description", "triggers", "rule"}
+            return data if required.issubset(data.keys()) else None
+        except Exception:
+            return None
+
+    def extract_from_success(self, messages: list[dict], tool_call_count: int) -> dict | None:
+        """Extract a reusable pattern from a successful task with 5+ tool calls."""
+        if tool_call_count < 5:
+            return None
+        if not self.llm:
+            return None
+
+        # summarise only assistant/tool content from recent conversation (token saving)
+        relevant = [
+            m for m in messages[-30:]
+            if m.get("role") in ("user", "assistant") and m.get("content")
+        ]
+        conversation_summary = "\n".join(
+            f"[{m['role']}] {str(m['content'])[:300]}" for m in relevant
+        )
+
+        prompt = f"""You are analyzing a coding agent's successfully completed task ({tool_call_count} tool calls).
+
+Conversation summary:
+{conversation_summary[:4000]}
+
+Extract ONE reusable skill/rule from this successful workflow that would help next time.
+Only extract if there's a genuinely non-obvious pattern worth saving.
+
+Respond as JSON:
+{{
+  "name": "snake_case_skill_name",
+  "description": "one-line description (Korean OK)",
+  "triggers": ["keyword1", "keyword2"],
+  "scope": ["file_pattern_or_app"],
+  "rule": "The reusable rule or workflow in imperative form.",
+  "why": "Why this pattern is worth saving",
+  "good_pattern": "What worked well",
+  "bad_pattern": "What to avoid",
+  "verify_cmd": "bash command to verify the agent followed this skill after task completion (exit 0 = success). Use empty string if not applicable. Example: 'git log --oneline -1 | grep -q .' to verify a commit was made, 'git diff --quiet' to verify no uncommitted changes."
+}}
+
+If no clear reusable pattern exists, respond: NONE"""
+
+        try:
+            response = self.llm.chat([{"role": "user", "content": prompt}])
+            text = response.content.strip() if hasattr(response, "content") else str(response).strip()
+            if text == "NONE" or not text:
+                return None
+            if text.startswith("```"):
+                lines = text.splitlines()
+                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            data = json.loads(text)
+            required = {"name", "description", "triggers", "rule"}
+            return data if required.issubset(data.keys()) else None
+        except Exception:
+            return None
+
+    def save_auto_learned(self, skill_data: dict) -> str | None:
+        """Save a self-learned skill directly to auto-learned/ (no pending stage, auto-approved)."""
+        name = skill_data.get("name", "")
+        if not name:
+            return None
+
+        triggers = json.dumps(skill_data.get("triggers", []))
+        scope = json.dumps(skill_data.get("scope", []))
+        # verify_cmd: fall back to rules table if not present in extracted data
+        verify_cmd = skill_data.get("verify_cmd", "")
+        if not verify_cmd:
+            rules = _load_verify_rules()
+            verify_cmd = rules.get("by_name", {}).get(name, "")
+
+        frontmatter = (
+            f"name: {name}\n"
+            f"description: {skill_data.get('description', '')}\n"
+            f"type: auto-learned\n"
+            f"status: auto-learned\n"
+            f"triggers: {triggers}\n"
+            f"scope: {scope}\n"
+            f"created_at: {_now()}\n"
+            f"last_used: \n"
+            f"use_count: 0\n"
+            f"success_count: 0\n"
+            f"fail_count: 0\n"
+            f"success_rate: 0.00\n"
+            f"missed_count: 0\n"
+            f"needs_review: false\n"
+            f"verify_cmd: {verify_cmd}\n"
+        )
+        body = f"""## Rule
+
+{skill_data.get('rule', '')}
+
+**Why**: {skill_data.get('why', '')}
+
+## Good Pattern
+
+```
+{skill_data.get('good_pattern', '')}
+```
+
+## Anti-Pattern
+
+```
+{skill_data.get('bad_pattern', '')}
+```
+"""
+        content = f"---\n{frontmatter}---\n\n{body}\n"
+
+        # Security scan
+        from .learner_guard import scan_skill_content
+        safe, reason = scan_skill_content(content)
+        if not safe:
+            print(f"\033[31m  [Learner] skill blocked ({name}): {reason}\033[0m")
+            return None
+
+        path = os.path.join(AUTO_LEARNED_DIR, f"{name}.md")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(content)
+        _add_hub_backlink(path, "_hub_auto")
+        return path
+
+    # ------------------------------------------------------------------
+    # Save as pending
+    # ------------------------------------------------------------------
+
+    def save_pending(self, skill_data: dict) -> str | None:
+        """Save an extracted skill as pending."""
+        name = skill_data.get("name", "")
+        if not name:
+            return None
+
+        # skip if already in approved
+        if os.path.exists(_skill_path("approved", name)):
+            return None
+
+        meta = SkillMeta(
+            name=name,
+            description=skill_data.get("description", ""),
+            triggers=skill_data.get("triggers", []),
+            scope=skill_data.get("scope", []),
+            status="pending",
+            created_at=_now(),
+        )
+
+        body = f"""## Rule
+
+{skill_data.get('rule', '')}
+
+**Why**: {skill_data.get('why', '')}
+
+## Good Pattern
+
+```
+{skill_data.get('good_pattern', '')}
+```
+
+## Anti-Pattern
+
+```
+{skill_data.get('bad_pattern', '')}
+```
+"""
+        path = _skill_path("pending", name)
+        _write_skill_file(path, meta, body)
+        return path
+
+    # ------------------------------------------------------------------
+    # Run pytest + auto-promote
+    # ------------------------------------------------------------------
+
+    def run_pytest_and_promote(self, cwd: str, skill_name: str) -> tuple[bool, str]:
+        """Run pytest and promote pending → approved on pass.
+
+        Returns: (passed, pytest_output)
+        """
+        venv_pytest = os.path.join(cwd, ".venv", "bin", "pytest")
+        if not os.path.exists(venv_pytest):
+            # no .venv found — search from project root
+            for root in [cwd] + [str(p) for p in Path(cwd).parents]:
+                candidate = os.path.join(root, ".venv", "bin", "pytest")
+                if os.path.exists(candidate):
+                    venv_pytest = candidate
+                    break
+
+        try:
+            result = subprocess.run(
+                [venv_pytest, "-x", "-q", "--tb=short"],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            output = result.stdout + result.stderr
+            passed = result.returncode == 0
+        except Exception as e:
+            output = str(e)
+            passed = False
+
+        if passed:
+            self._promote(skill_name)
+
+        return passed, output
+
+    def _promote(self, name: str) -> None:
+        """Move pending → approved."""
+        src = _skill_path("pending", name)
+        dst = _skill_path("approved", name)
+        if not os.path.exists(src):
+            return
+        parsed = _parse_skill_file(src)
+        if not parsed:
+            return
+        meta, body = parsed
+        meta.status = "approved"
+        _write_skill_file(dst, meta, body)
+        os.remove(src)
+        _add_hub_backlink(dst, "_hub_approved")
+
+    # ------------------------------------------------------------------
+    # Usage tracking
+    # ------------------------------------------------------------------
+
+    def record_run(
+        self,
+        skill_names: list[str],
+        pytest_passed: bool | None = None,
+        verify_results: dict[str, bool | None] | None = None,
+    ) -> None:
+        """Update success/fail counters for each skill after execution.
+
+        pytest_passed: primary success signal (no exception=True, exception=False, not run=None)
+        verify_results: {skill_name: bool | None} — verify_cmd execution results.
+          True  = verification passed (success confirmed)
+          False = verification failed (includes false positives — always recorded as failure)
+          None  = verify_cmd not defined or not runnable (fall back to pytest_passed signal)
+
+        verify_results takes precedence over pytest_passed when provided.
+        """
+        verify_results = verify_results or {}
+
+        for name in skill_names:
+            # prefer approved; fall back to auto-learned
+            path = _skill_path("approved", name)
+            if not os.path.exists(path):
+                path = os.path.join(AUTO_LEARNED_DIR, f"{name}.md")
+            if not os.path.exists(path):
+                continue
+            parsed = _parse_skill_file(path)
+            if not parsed:
+                continue
+            meta, body = parsed
+            meta.use_count += 1
+            meta.last_used = _now()
+
+            # determine final success/failure: verify_result takes priority, fallback → pytest_passed
+            verified = verify_results.get(name)  # True / False / None
+            if verified is True:
+                meta.success_count += 1
+            elif verified is False:
+                # verification failed — includes LLM false positives
+                meta.fail_count += 1
+            elif pytest_passed is True:
+                meta.success_count += 1
+            elif pytest_passed is False:
+                meta.fail_count += 1
+            # verified=None AND pytest_passed=None → only use_count/last_used updated
+
+            _write_skill_file(path, meta, body)
+
+        # cleanup after counter update
+        self.cleanup()
+
+    def record_missed(self, skill_names: list[str]) -> None:
+        """Increment missed_count when a skill was matched but the LLM did not actually follow it.
+
+        Called after task completion for skills that were injected but not reflected in the result.
+        """
+        for name in skill_names:
+            path = _skill_path("approved", name)
+            if not os.path.exists(path):
+                path = os.path.join(AUTO_LEARNED_DIR, f"{name}.md")
+            if not os.path.exists(path):
+                continue
+            parsed = _parse_skill_file(path)
+            if not parsed:
+                continue
+            meta, body = parsed
+            meta.missed_count += 1
+            _write_skill_file(path, meta, body)
+
+    # ------------------------------------------------------------------
+    # Auto-deprecation
+    # ------------------------------------------------------------------
+
+    def cleanup(self) -> list[str]:
+        """Manage underperforming skills. Targets both approved and auto-learned.
+
+        Two-stage policy:
+          Stage 1 (needs_review): success rate drops → set needs_review=True flag → prompt improvement
+          Stage 2 (deprecated): continued failures while in needs_review state → auto-deprecate
+        """
+        deprecated = []
+        targets = list(Path(APPROVED_DIR).glob("*.md")) + list(Path(AUTO_LEARNED_DIR).glob("*.md"))
+        for p in targets:
+            parsed = _parse_skill_file(str(p))
+            if not parsed:
+                continue
+            meta, body = parsed
+
+            should_deprecate = False
+            should_flag_review = False
+            reason = ""
+
+            # check success rate for sufficiently used skills
+            if meta.use_count >= MIN_USES_BEFORE_EVAL:
+                if meta.success_rate < DEPRECATE_THRESHOLD:
+                    if meta.needs_review:
+                        # still failing despite needs_review flag → deprecate
+                        # stricter threshold: use_count >= 10 AND success_rate < 30%
+                        if meta.use_count >= 10 and meta.success_rate < 0.3:
+                            should_deprecate = True
+                            reason = f"success_rate {meta.success_rate:.0%} < 30% even after review (use={meta.use_count})"
+                    else:
+                        # first failure → set review flag instead of deprecating
+                        should_flag_review = True
+                        reason = f"success_rate {meta.success_rate:.0%} < {DEPRECATE_THRESHOLD:.0%}"
+
+            # check for long-term inactivity (only when success_rate < 0.6)
+            if meta.last_used and meta.use_count > 0:
+                try:
+                    last = datetime.strptime(meta.last_used, "%Y-%m-%d")
+                    days_unused = (datetime.now() - last).days
+                    if days_unused > UNUSED_DAYS_THRESHOLD and meta.success_rate < 0.6:
+                        if meta.needs_review:
+                            should_deprecate = True
+                            reason = f"unused for {days_unused} days + success_rate {meta.success_rate:.0%} (no improvement after review)"
+                        else:
+                            should_flag_review = True
+                            reason = f"unused for {days_unused} days + success_rate {meta.success_rate:.0%}"
+                except Exception:
+                    pass
+
+            if should_deprecate:
+                meta.status = "deprecated"
+                dst = _skill_path("deprecated", meta.name)
+                _write_skill_file(dst, meta, body + f"\n\n<!-- deprecated: {reason} -->")
+                os.remove(str(p))
+                deprecated.append(meta.name)
+                print(f"\033[33m  [Learner] skill deprecated: {meta.name} ({reason})\033[0m")
+            elif should_flag_review and not meta.needs_review:
+                meta.needs_review = True
+                _write_skill_file(str(p), meta, body)
+                print(f"\033[33m  [Learner] skill needs review: {meta.name} ({reason})\033[0m")
+
+        return deprecated
+
+    # ------------------------------------------------------------------
+    # Run verify_cmd (validate result after task completion)
+    # ------------------------------------------------------------------
+
+    def run_verify_cmds(self, skill_names: list[str], cwd: str) -> dict[str, bool | None]:
+        """Run each skill's verify_cmd to validate actual success.
+
+        verify_cmd resolution priority:
+          1. verify_cmd in the skill file frontmatter (directly defined)
+          2. ~/.hermit/skills/verify-rules.json by_name table (name match)
+          3. verify-rules.json by_trigger_keyword table (trigger keyword match)
+          4. None if not found (no signal)
+
+        Returns: {skill_name: True/False/None}
+          True  = verify_cmd exit 0 (success confirmed)
+          False = verify_cmd non-zero (failure — includes LLM false positives)
+          None  = verify_cmd not defined (no signal)
+        """
+        import subprocess
+
+        rules = _load_verify_rules()
+        results: dict[str, bool | None] = {}
+
+        for name in skill_names:
+            path = _skill_path("approved", name)
+            if not os.path.exists(path):
+                path = os.path.join(AUTO_LEARNED_DIR, f"{name}.md")
+
+            meta = None
+            if os.path.exists(path):
+                parsed = _parse_skill_file(path)
+                if parsed:
+                    meta, _ = parsed
+
+            # determine verify_cmd (apply priority order)
+            cmd = ""
+            if meta and meta.verify_cmd:
+                cmd = meta.verify_cmd                                    # 1. directly defined in skill
+            elif name in rules.get("by_name", {}):
+                cmd = rules["by_name"][name]                             # 2. name match
+            elif meta:
+                # 3. trigger keyword match
+                trigger_str = " ".join(meta.triggers).lower()
+                for kw, kw_cmd in rules.get("by_trigger_keyword", {}).items():
+                    if kw.lower() in trigger_str:
+                        cmd = kw_cmd
+                        break
+
+            if not cmd:
+                results[name] = None
+                continue
+
+            try:
+                r = subprocess.run(
+                    cmd,
+                    shell=True,
+                    cwd=cwd,
+                    capture_output=True,
+                    timeout=15,
+                )
+                results[name] = r.returncode == 0
+            except Exception:
+                results[name] = None  # execution error → treat as no signal
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Load active skills (for injection)
+    # ------------------------------------------------------------------
+
+    def get_active_skills(self, context_keywords: list[str] | None = None) -> list[tuple[str, str]]:
+        """Return approved + auto-learned skills that match the current context.
+
+        Returns: [(name, body), ...]
+        """
+        result = []
+        search_dirs = [APPROVED_DIR, AUTO_LEARNED_DIR]
+        for search_dir in search_dirs:
+            for p in Path(search_dir).glob("*.md"):
+                parsed = _parse_skill_file(str(p))
+                if not parsed:
+                    continue
+                meta, body = parsed
+
+                # match context keywords (return all if none provided)
+                if context_keywords:
+                    match = any(
+                        kw.lower() in " ".join(meta.triggers + meta.scope).lower()
+                        for kw in context_keywords
+                    )
+                    if not match:
+                        continue
+
+                result.append((meta.name, body))
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Status report
+    # ------------------------------------------------------------------
+
+    def status_report(self) -> str:
+        pending = len(list(Path(PENDING_DIR).glob("*.md")))
+        approved = list(Path(APPROVED_DIR).glob("*.md"))
+        deprecated = len(list(Path(DEPRECATED_DIR).glob("*.md")))
+        auto_learned = len(list(Path(AUTO_LEARNED_DIR).glob("*.md")))
+
+        lines = [
+            f"[Learned Skills] pending:{pending} approved:{len(approved)} "
+            f"auto-learned:{auto_learned} deprecated:{deprecated}",
+        ]
+        for p in approved:
+            parsed = _parse_skill_file(str(p))
+            if parsed:
+                meta, _ = parsed
+                lines.append(
+                    f"  • {meta.name}: {meta.success_rate:.0%} "
+                    f"({meta.success_count}✓/{meta.fail_count}✗, {meta.use_count}x)"
+                )
+        for p in Path(AUTO_LEARNED_DIR).glob("*.md"):
+            parsed = _parse_skill_file(str(p))
+            if parsed:
+                meta, _ = parsed
+                lines.append(f"  ✦ {meta.name} [auto] ({meta.use_count}x)")
+        return "\n".join(lines)

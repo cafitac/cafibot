@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# HermitAgent MCP Server startup script (Gateway proxy mode)
+# Usage:
+#   ./mcp-server.sh              # stdio mode (direct Claude Code connection)
+#   ./mcp-server.sh --http       # HTTP mode (Docker/LaunchAgent)
+#   ./mcp-server.sh --http 3737  # HTTP mode + custom port
+#   ./mcp-server.sh --stop       # Stop
+#   ./mcp-server.sh --status     # Check status
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# ── Python path discovery ─────────────────────────────────────────────────
+# Override with HERMIT_VENV_DIR if your venv lives outside the project root.
+PYTHON=""
+for candidate in \
+    ".venv/bin/python" \
+    "${HERMIT_VENV_DIR:-}/bin/python" \
+    "$(which python3 2>/dev/null)" \
+    "$(which python 2>/dev/null)"; do
+    if [ -x "$candidate" ] && "$candidate" -c "import mcp" 2>/dev/null; then
+        PYTHON="$candidate"
+        break
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: Cannot find Python with the mcp package installed."
+    echo "  .venv/bin/python or pip install mcp"
+    exit 1
+fi
+
+# ── Settings ──────────────────────────────────────────────────────────────
+LOG_DIR="$HOME/.hermit"
+LOG_FILE="$LOG_DIR/mcp_server.log"
+PID_FILE="$LOG_DIR/mcp_server.pid"
+PORT="${2:-3737}"
+
+mkdir -p "$LOG_DIR"
+
+# ── Command handling ──────────────────────────────────────────────────────
+case "${1:-}" in
+    --stop)
+        if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE")
+            if kill "$PID" 2>/dev/null; then
+                echo "MCP Server stopped (PID $PID)"
+                rm -f "$PID_FILE"
+            else
+                echo "MCP Server not running (stale PID $PID)"
+                rm -f "$PID_FILE"
+            fi
+        else
+            PID=$(ps aux | grep '[h]ermit_agent.mcp_server' | awk '{print $2}' | head -1)
+            if [ -n "$PID" ]; then
+                kill "$PID"
+                echo "MCP Server stopped (PID $PID)"
+            else
+                echo "MCP Server not running"
+            fi
+        fi
+        ;;
+
+    --http)
+        echo "Starting HermitAgent MCP Server (HTTP mode, port $PORT) ..."
+        echo "  Python: $PYTHON"
+        echo "  Log: $LOG_FILE"
+        nohup "$PYTHON" -m hermit_agent.mcp_server --http "$PORT" >> "$LOG_FILE" 2>&1 &
+        echo $! > "$PID_FILE"
+        sleep 2
+        if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "  PID: $(cat "$PID_FILE")"
+            echo "  MCP: http://0.0.0.0:$PORT/mcp"
+        else
+            echo "  ERROR: MCP Server exited immediately. Check log:"
+            tail -5 "$LOG_FILE"
+            rm -f "$PID_FILE"
+            exit 1
+        fi
+        ;;
+
+    --status)
+        echo "=== MCP Server ==="
+        ps aux | grep '[h]ermit_agent.mcp_server' | awk '{print "PID:", $2, "started:", $9}' || echo "not running"
+        echo ""
+        echo "=== Gateway ==="
+        curl -s "http://127.0.0.1:8765/health" | python3 -m json.tool 2>/dev/null || echo "Gateway not responding"
+        ;;
+
+    *)
+        echo "Starting HermitAgent MCP Server (stdio mode, Gateway proxy) ..."
+        echo "  Python: $PYTHON"
+        echo "  Log: $LOG_FILE"
+        echo ""
+        exec "$PYTHON" -m hermit_agent.mcp_server
+        ;;
+esac
