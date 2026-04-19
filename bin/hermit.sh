@@ -34,16 +34,135 @@ fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 VENV_SITE=$(ls -d "$VENV_DIR"/lib/python*/site-packages 2>/dev/null | head -1)
 
+# Configuration lives in ~/.hermit/settings.json — installer writes
+# it, runtime reads it via load_settings(). .env files are NOT read by
+# the launchers (see ADR: single-source config). HERMIT_* env vars you
+# `export` in your shell still override settings.json as a last
+# resort, mostly useful for one-shot `HERMIT_MODEL=x hermit "..."`.
+
 # Auto-start the gateway if it isn't already listening. The standalone
 # CLI can run without it, but keeping the gateway warm means that if the
 # user hops into a Claude Code session next, MCP/run_task traffic lands
 # on something alive. Opt out with HERMIT_AUTO_GATEWAY=0.
+_GW_URL="${HERMIT_GATEWAY_URL:-http://127.0.0.1:8765}"
 if [ "${HERMIT_AUTO_GATEWAY:-1}" != "0" ]; then
-  _GW_URL="${HERMIT_GATEWAY_URL:-http://127.0.0.1:8765}"
   if ! curl -sf --max-time 1 "$_GW_URL/health" >/dev/null 2>&1; then
     echo "hermit: gateway not reachable at $_GW_URL — starting daemon..." >&2
     "$HERMIT_DIR/bin/gateway.sh" --daemon >/dev/null 2>&1 || \
       echo "hermit: gateway --daemon failed (see ~/.hermit/gateway.log); continuing anyway." >&2
+    # Give it a moment to come up before the preflight below.
+    for _i in 1 2 3 4 5; do
+      curl -sf --max-time 1 "$_GW_URL/health" >/dev/null 2>&1 && break
+      sleep 0.5
+    done
+  fi
+fi
+
+# Preflight: bail out early with an actionable message when we can
+# already tell the LLM will not respond. The two common cases:
+#   a) model is an external provider (no `:`) but llm_api_key is empty
+#   b) gateway /health reports components.llm.status == "major"
+#      (endpoint unreachable, not a 4xx auth issue we can still learn
+#      from). Exit 2 means "configuration problem, please fix" so it
+#      is distinguishable from normal runtime errors.
+if [ "${HERMIT_SKIP_PREFLIGHT:-0}" != "1" ]; then
+  _PF_MSG="$("$VENV_PYTHON" - "$_GW_URL" <<'PYEOF' 2>/dev/null || true
+import json, os, sys, urllib.request
+
+gw_url = sys.argv[1]
+try:
+    from hermit_agent.config import load_settings
+except Exception:
+    sys.exit(0)
+
+cfg = load_settings(cwd=os.environ.get("PWD"))
+model = cfg.get("model", "")
+llm_url = cfg.get("llm_url", "")
+api_key = cfg.get("llm_api_key", "")
+
+def _suggest_alternatives(current_model: str) -> list[str]:
+    """Collect reachable model ids the user could try instead."""
+    alts: list[str] = []
+    # Locally-installed ollama models.
+    try:
+        r = urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2.0)
+        for m in json.loads(r.read()).get("models", []):
+            name = m.get("name", "")
+            if name and name != current_model:
+                alts.append(f"{name}  (local ollama)")
+    except Exception:
+        pass
+    # Models the gateway knows about (includes the configured default
+    # for each provider whose key is set elsewhere).
+    try:
+        r = urllib.request.urlopen(f"{gw_url}/health", timeout=2.0)
+        for m in json.loads(r.read()).get("models", []):
+            mid = m.get("id", "")
+            prov = m.get("provider", "?")
+            if mid and mid != current_model:
+                alts.append(f"{mid}  (via {prov})")
+    except Exception:
+        pass
+    # De-dup while preserving order.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for a in alts:
+        if a not in seen:
+            seen.add(a)
+            uniq.append(a)
+    return uniq
+
+
+def _emit_alternatives(current_model: str) -> None:
+    alts = _suggest_alternatives(current_model)
+    if not alts:
+        return
+    print("\n  Reachable alternatives right now:")
+    for a in alts[:10]:
+        print(f"    - {a}")
+    print(
+        "\n  Switch with `export HERMIT_MODEL=<id>` for a one-shot run,"
+        "\n  or edit \"model\" in ~/.hermit/settings.json for a persistent change."
+    )
+
+
+# (a) External model needs an API key. `:` in the model name means
+#     ollama (local); anything else is a cloud provider.
+if model and ":" not in model and not api_key:
+    print(
+        f"No API key configured for external model '{model}' ({llm_url}).\n"
+        f"  Fix: re-run ./install.sh and pick a provider, or add\n"
+        f"  \"llm_api_key\": \"...\" to ~/.hermit/settings.json."
+    )
+    _emit_alternatives(model)
+    sys.exit(0)
+
+# (b) Ask the gateway whether it can actually reach the LLM.
+try:
+    r = urllib.request.urlopen(f"{gw_url}/health", timeout=2.0)
+    health = json.loads(r.read())
+except Exception:
+    # Gateway itself not reachable — harmless for the standalone CLI;
+    # the run will fail with its own clearer error if needed.
+    sys.exit(0)
+
+llm = health.get("components", {}).get("llm", {})
+if llm.get("status") == "major":
+    err = llm.get("error") or "endpoint unreachable"
+    print(
+        f"Gateway reports the configured LLM is unreachable:\n"
+        f"  url:   {llm.get('url', llm_url)}\n"
+        f"  error: {err}\n"
+        f"  Fix: check llm_url / llm_api_key in ~/.hermit/settings.json,\n"
+        f"  mount the ollama model storage, or pick a different provider."
+    )
+    _emit_alternatives(model)
+PYEOF
+)"
+  if [ -n "$_PF_MSG" ]; then
+    printf '\033[1;31mhermit preflight failed\033[0m\n%s\n' "$_PF_MSG" >&2
+    echo "(set HERMIT_SKIP_PREFLIGHT=1 to bypass this check.)" >&2
+    exit 2
   fi
 fi
 
