@@ -68,6 +68,24 @@ if pgrep -f 'hermit_agent\.mcp_server' >/dev/null 2>&1; then
     "$PROJECT_DIR/bin/mcp-server.sh" --stop || true
   fi
 fi
+# Bridge and any other `python -m hermit_agent.*` children (spawned by
+# Claude Code MCP clients, launch agents, etc). We kill them by PID
+# rather than invoking a stop script because there is no dedicated one.
+OTHER_PIDS="$(pgrep -f 'hermit_agent\.(bridge|[a-z_]+)' 2>/dev/null \
+  | xargs -I{} sh -c 'ps -p {} -o pid,command= 2>/dev/null' \
+  | grep -v 'hermit_agent\.\(gateway\|mcp_server\)' \
+  | awk '{print $1}' || true)"
+if [ -n "$OTHER_PIDS" ]; then
+  say "Found other hermit_agent processes still running:"
+  for _pid in $OTHER_PIDS; do
+    ps -p "$_pid" -o pid,command= 2>/dev/null | sed 's/^/   /'
+  done
+  if confirm "Stop them?"; then
+    for _pid in $OTHER_PIDS; do
+      kill "$_pid" 2>/dev/null && say "  killed $_pid" || warn "  could not kill $_pid"
+    done
+  fi
+fi
 
 # ──────────────────────────────────────────────────────────────
 # 1. ~/.hermit/ — settings, gateway.db, handoffs, logs
@@ -122,10 +140,18 @@ if [ -d "$CC_CMDS_DIR" ]; then
           ;;
       esac
     else
-      say "Leaving $link (regular file, not a symlink we created)"
+      # Regular file (not a symlink install.sh would have made).
+      # Offer to delete but warn explicitly — may be user-edited.
+      if confirm "Remove regular file $link (not a symlink — may contain your edits)?"; then
+        rm -f "$link"
+        say "Removed $link"
+        REMOVED_ANY=1
+      else
+        say "Leaving $link"
+      fi
     fi
   done
-  [ "$REMOVED_ANY" -eq 0 ] && say "No hermit-command symlinks to remove."
+  [ "$REMOVED_ANY" -eq 0 ] && say "No hermit-command files to remove."
 fi
 
 # ──────────────────────────────────────────────────────────────
@@ -230,8 +256,52 @@ PYEOF
   esac
 done
 
+# ──────────────────────────────────────────────────────────────
+# 6. Shell rc — remove HERMIT_* env exports (HERMIT_AUTO_WRAP,
+#    HERMIT_API_KEY, etc). User may have set these manually; we
+#    prompt per line.
+# ──────────────────────────────────────────────────────────────
+for RC_FILE in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+  [ -f "$RC_FILE" ] || continue
+  # Lines like: export HERMIT_xxx=... / HERMIT_xxx=...
+  MATCHES="$(grep -nE '^[[:space:]]*(export[[:space:]]+)?HERMIT_[A-Z_]+=' "$RC_FILE" || true)"
+  [ -z "$MATCHES" ] && continue
+  echo "Found HERMIT_* env lines in $RC_FILE:"
+  printf '%s\n' "$MATCHES" | sed 's/^/   /'
+  if confirm "Remove these lines from $RC_FILE?"; then
+    cp "$RC_FILE" "$RC_FILE.backup-$(date +%Y%m%d-%H%M%S)"
+    # Extract line numbers to delete, in descending order so indices
+    # stay valid as we pop them.
+    LINES_DESC="$(printf '%s\n' "$MATCHES" | cut -d: -f1 | sort -rn)"
+    python3 - "$RC_FILE" "$LINES_DESC" <<'PYEOF'
+import sys
+path = sys.argv[1]
+lines_desc = [int(x) for x in sys.argv[2].split()]
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+# Also drop a blank "# Hermit …" comment immediately above if present.
+for ln in lines_desc:
+    idx = ln - 1
+    if idx < 0 or idx >= len(lines):
+        continue
+    del lines[idx]
+    # Remove an orphaned header comment directly above.
+    if idx - 1 >= 0 and lines[idx - 1].strip().lower().startswith("# hermit"):
+        # Only remove if the NEXT line (post-delete) is blank or another
+        # section heading — avoids eating unrelated comments.
+        if idx >= len(lines) or not lines[idx].strip().lower().startswith("export hermit") \
+           and not lines[idx].strip().lower().startswith("hermit_"):
+            del lines[idx - 1]
+with open(path, "w", encoding="utf-8") as f:
+    f.writelines(lines)
+PYEOF
+    say "Removed HERMIT_* lines from $RC_FILE (backup written)"
+  fi
+done
+
 say "Uninstall complete."
 echo "  - Ollama models are untouched. Run \`ollama rm qwen3-coder:30b\` (or similar) to reclaim disk."
 echo "  - The repo itself is untouched. Delete the project directory manually if you no longer need it."
-echo "  - Your current shell has a cached \`hermit\` alias. Run \`unalias hermit\`"
-echo "    (or \`source ~/.zshrc\` / open a new shell) so it stops pointing at the old path."
+echo "  - Your current shell has a cached \`hermit\` alias and any \`HERMIT_*\` env vars."
+echo "    Run \`unalias hermit\` + \`unset \$(env | grep ^HERMIT_ | cut -d= -f1)\`,"
+echo "    or just open a new terminal, so they stop leaking into new commands."
