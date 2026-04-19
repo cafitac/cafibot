@@ -33,17 +33,17 @@ def _get_admission() -> AdmissionController:
     return _admission
 
 
-def _derive_anthropic_base_url(llm_url: str) -> str:
-    """Derive the z.ai Anthropic endpoint from the configured OpenAI-compat llm_url.
+def _derive_anthropic_base_url(openai_base_url: str) -> str:
+    """Fallback Anthropic endpoint derivation for z.ai-shaped URLs.
 
-    z.ai exposes ``/api/paas/v4`` (OpenAI-compat) and ``/api/anthropic`` (Anthropic)
-    under the same host. When users configure ``llm_url`` for the OpenAI-compat
-    endpoint, swap the path suffix to point at the Anthropic endpoint.
+    Used when the provider block does not specify `anthropic_base_url`.
+    z.ai exposes `/api/coding/paas/v4` (OpenAI-compat) and `/api/anthropic`
+    under the same host.
     """
-    base = llm_url.rstrip("/")
-    if "/api/paas" in base:
-        return base.split("/api/paas", 1)[0] + "/api/anthropic"
-    # Fallback: assume same host, append /api/anthropic
+    base = openai_base_url.rstrip("/")
+    if "/api/paas" in base or "/api/coding/paas" in base:
+        host = base.split("/api/", 1)[0]
+        return host + "/api/anthropic"
     if base.endswith("/v1"):
         base = base[:-3]
     return base.rstrip("/") + "/api/anthropic"
@@ -52,13 +52,13 @@ def _derive_anthropic_base_url(llm_url: str) -> str:
 def _get_adapter(platform: str) -> ProviderAdapter:
     """Return a cached provider adapter for *platform*.
 
-    Adapters are lazily constructed from settings and cached for the process
-    lifetime, matching the semantics of ``_get_admission``.
+    Adapters are lazily constructed from `cfg["providers"][platform]` and
+    cached for the process lifetime, matching `_get_admission`'s semantics.
     """
     if platform in _adapters:
         return _adapters[platform]
 
-    from ...config import load_settings
+    from ...config import get_provider_cred, load_settings
     cfg = load_settings()
 
     adapter: ProviderAdapter
@@ -67,11 +67,12 @@ def _get_adapter(platform: str) -> ProviderAdapter:
             base_url=cfg.get("ollama_url", "http://localhost:11434/v1"),
         )
     elif platform == "z.ai":
-        llm_url = cfg.get("llm_url", "https://api.z.ai/api/coding/paas/v4")
+        cred = get_provider_cred(cfg, "z.ai")
+        openai_base_url = cred.get("base_url") or "https://api.z.ai/api/coding/paas/v4"
         adapter = ZaiAdapter(
-            openai_base_url=llm_url,
-            anthropic_base_url=_derive_anthropic_base_url(llm_url),
-            api_key=cfg.get("llm_api_key", ""),
+            openai_base_url=openai_base_url,
+            anthropic_base_url=cred.get("anthropic_base_url") or _derive_anthropic_base_url(openai_base_url),
+            api_key=cred.get("api_key", ""),
         )
     else:
         raise HTTPException(

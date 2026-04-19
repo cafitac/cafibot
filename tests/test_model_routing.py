@@ -16,8 +16,12 @@ from hermit_agent.config import DEFAULTS, select_llm_endpoint
 
 def _cfg(**overrides):
     base = {
-        "llm_url": "https://api.z.ai/api/coding/paas/v4",
-        "llm_api_key": "zai-key",
+        "providers": {
+            "z.ai": {
+                "base_url": "https://api.z.ai/api/coding/paas/v4",
+                "api_key": "zai-key",
+            },
+        },
         "ollama_url": "http://localhost:11434/v1",
     }
     base.update(overrides)
@@ -52,12 +56,13 @@ def test_ollama_coder_model_routes_to_ollama():
     assert "11434" in url
 
 
-def test_empty_model_uses_configured_default():
-    """If the model name is empty, it goes to the configured llm_url (default)."""
+def test_empty_model_returns_empty_endpoint():
+    """Empty model can't be routed — callers are expected to raise
+    UnknownPlatform upstream rather than pick a silent default."""
     cfg = _cfg()
     url, api_key = select_llm_endpoint("", cfg)
-    assert "z.ai" in url
-    assert api_key == "zai-key"
+    assert url == ""
+    assert api_key == ""
 
 
 def test_routing_uses_cfg_override_for_ollama_url():

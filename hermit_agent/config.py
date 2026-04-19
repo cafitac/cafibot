@@ -30,8 +30,11 @@ LOCAL_SETTINGS_RELPATH = ".hermit/settings.json"
 DEFAULTS: dict[str, Any] = {
     "gateway_url": "http://localhost:8765",
     "gateway_api_key": "",
-    "llm_url": "http://localhost:11434/v1",
-    "llm_api_key": "",
+    # Per-platform upstream credentials. Keyed by platform slug
+    # (`z.ai`, `anthropic`, `openai`, …). Each block carries at least
+    # `base_url` + `api_key`; Anthropic-compat paths can add
+    # `anthropic_base_url`. See `get_provider_cred(cfg, platform)`.
+    "providers": {},
     "ollama_url": "http://localhost:11434/v1",
     "model": "qwen3-coder:30b",
     "max_turns": 200,
@@ -50,12 +53,21 @@ DEFAULTS: dict[str, Any] = {
     "external_max_concurrent": 10,
 }
 
-_KNOWN_KEYS = set(DEFAULTS)
+# Legacy flat fields accepted on read so pre-migration settings still
+# load. `load_settings()` lifts them into `providers` and callers stop
+# seeing them. Removed from DEFAULTS so new installs don't reintroduce
+# the flat shape.
+_LEGACY_KEYS = {"llm_url", "llm_api_key"}
+
+_KNOWN_KEYS = set(DEFAULTS) | _LEGACY_KEYS
 
 _ENV_MAP = {
     "HERMIT_GATEWAY_URL": "gateway_url",
     "HERMIT_GATEWAY_API_KEY": "gateway_api_key",
     "HERMIT_MODEL": "model",
+    # Legacy flat aliases are accepted at env level and lifted into
+    # `providers` during load_settings(), matching the settings.json
+    # migration path.
     "HERMIT_LLM_URL": "llm_url",
     "HERMIT_API_KEY": "llm_api_key",
     "HERMIT_OLLAMA_URL": "ollama_url",
@@ -69,15 +81,47 @@ _ENV_MAP = {
 }
 
 
-def select_llm_endpoint(model: str, cfg: dict[str, Any]) -> tuple[str, str]:
-    """Selects an LLM endpoint by model name and returns (base_url, api_key).
+# Model-prefix → platform slug. Duplicates gateway/routing.py rules on
+# purpose: this layer is reachable from standalone callers that never
+# import the gateway package.
+_MODEL_PREFIX_PLATFORM: list[tuple[str, str]] = [
+    ("glm-", "z.ai"),
+    ("claude-", "anthropic"),
+    ("gpt-", "openai"),
+]
 
-    The `name:tag` pattern (e.g., `qwen3:8b`) routes to local ollama,
-    while others (e.g., `glm-5.1`) use the configured `llm_url`.
+
+def _resolve_platform_for_model(model: str) -> str | None:
+    if not model:
+        return None
+    if ":" in model:
+        return "local"
+    for prefix, slug in _MODEL_PREFIX_PLATFORM:
+        if model.startswith(prefix):
+            return slug
+    return None
+
+
+def get_provider_cred(cfg: dict[str, Any], platform: str) -> dict[str, Any]:
+    providers = cfg.get("providers") or {}
+    block = providers.get(platform)
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def select_llm_endpoint(model: str, cfg: dict[str, Any]) -> tuple[str, str]:
+    """Resolves (base_url, api_key) for *model*.
+
+    Ollama models (`name:tag`) route to `ollama_url`; external models
+    look up their platform block in `providers`. Returns `('', '')`
+    when nothing is configured so callers can raise.
     """
-    if model and ":" in model:
+    platform = _resolve_platform_for_model(model)
+    if platform == "local":
         return cfg.get("ollama_url", DEFAULTS["ollama_url"]), ""
-    return cfg.get("llm_url", DEFAULTS["llm_url"]), cfg.get("llm_api_key", "")
+    if platform is None:
+        return "", ""
+    cred = get_provider_cred(cfg, platform)
+    return cred.get("base_url", ""), cred.get("api_key", "")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -130,6 +174,22 @@ def load_settings(cwd: str | None = None) -> dict[str, Any]:
                 settings[k] = int(val)
             except ValueError:
                 settings[k] = DEFAULTS[k]
+
+    # 6. Lift legacy flat provider fields (llm_url + llm_api_key) into
+    #    the `providers` dict. Heuristic: if the URL is z.ai, attach to
+    #    the "z.ai" block; otherwise drop under "legacy" so the data is
+    #    not lost. Existing `providers` entries win.
+    legacy_url = settings.pop("llm_url", "") or ""
+    legacy_key = settings.pop("llm_api_key", "") or ""
+    providers = settings.get("providers") or {}
+    if not isinstance(providers, dict):
+        providers = {}
+    if legacy_url or legacy_key:
+        slug = "z.ai" if "z.ai" in legacy_url else "legacy"
+        block = providers.setdefault(slug, {})
+        block.setdefault("base_url", legacy_url)
+        block.setdefault("api_key", legacy_key)
+    settings["providers"] = providers
 
     return settings
 

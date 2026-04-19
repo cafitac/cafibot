@@ -125,13 +125,19 @@ ollama pull qwen3-coder:30b
 ```json
 {
   "gateway_url": "http://localhost:8765",
-  "gateway_api_key": "hermit-mcp-…",    // set by install.sh
-  "llm_api_key": "<your z.ai key>",     // you paste this
-  "model": "glm-5.1"
+  "gateway_api_key": "hermit-mcp-…",
+  "model": "glm-5.1",
+  "providers": {
+    "z.ai": {
+      "base_url": "https://api.z.ai/api/coding/paas/v4",
+      "api_key": "<your z.ai key>",
+      "anthropic_base_url": "https://api.z.ai/api/anthropic"
+    }
+  }
 }
 ```
 
-Two keys, two layers: `gateway_api_key` authenticates Claude Code against the local Hermit gateway, `llm_api_key` authenticates the gateway against the upstream LLM provider.
+Two keys, two layers: `gateway_api_key` authenticates clients against the local Hermit gateway, and `providers[<slug>].api_key` is the gateway's own credential for talking to the upstream platform. Add a new provider by dropping another block into `providers` — e.g. `providers["anthropic"]` with a base_url + api_key.
 
 ### Skipped the API key prompt?
 
@@ -215,7 +221,7 @@ Priority: CLI flag > env var > `<cwd>/.hermit/settings.json` > `~/.hermit/settin
 
 **Field semantics after the proxy refactor:**
 - `gateway_url` / `gateway_api_key` — **client-facing**. What the `hermit` CLI (and any other client) sends to authenticate against the local gateway.
-- `llm_api_key` / `llm_url` — **gateway-internal, upstream**. What the gateway itself uses to talk to z.ai (or any configured external provider) on your behalf. Clients never see or need these.
+- `providers[<slug>]` — **gateway-internal, upstream**. Per-platform block the gateway uses to reach z.ai / Anthropic / OpenAI / etc. on your behalf. Clients never see these. Adding a new provider is one JSON block — the adapter layer picks it up by slug.
 
 ## Architecture (short version)
 
