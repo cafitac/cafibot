@@ -81,9 +81,13 @@ async def health():
     }
 
     # ── LLM connection status ──
+    from ..config import select_llm_endpoint
     cfg = load_settings()
-    llm_url = cfg.get("llm_url", "http://localhost:11434/v1")
-    llm_api_key = cfg.get("llm_api_key", "")
+    # Resolve upstream for the configured default model — ollama or
+    # providers[<slug>] per the active routing rules.
+    llm_url, llm_api_key = select_llm_endpoint(cfg.get("model", ""), cfg)
+    if not llm_url:
+        llm_url = cfg.get("ollama_url", "http://localhost:11434/v1")
     llm_status = "operational"
     llm_latency_ms = None
     llm_error = None

@@ -53,31 +53,57 @@ PENDING_STEPS=()
 say()  { printf "\033[1;36m▸\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m!\033[0m %s\n" "$*" >&2; }
 
-# 0. Settings rename sanity check (US-008).
-#    Warn when an existing settings.json carries a non-empty llm_api_key but
-#    the platform ACL tables (migration 002) are not yet present — this is the
-#    shape from before the two-endpoint model was introduced.
+# 0. Settings rename sanity check + legacy-shape migration to providers dict.
+#    Warn when an existing settings.json carries a non-empty flat llm_api_key
+#    (pre-providers-dict shape). Offer an automatic lift into
+#    providers["z.ai"] so the user doesn't need to hand-edit JSON.
 GATEWAY_DB_CHECK="$HOME/.hermit/gateway.db"
 SETTINGS_FILE_CHECK="$HOME/.hermit/settings.json"
 if [ -f "$SETTINGS_FILE_CHECK" ]; then
-  _existing_llm_key="$(python3 -c "
+  _legacy_state="$(python3 - "$SETTINGS_FILE_CHECK" <<'PY' 2>/dev/null || true
 import json, sys
 try:
-    d = json.load(open('$SETTINGS_FILE_CHECK'))
-    print(d.get('llm_api_key', ''))
+    d = json.load(open(sys.argv[1]))
 except Exception:
-    print('')
-" 2>/dev/null || true)"
-  if [ -n "$_existing_llm_key" ]; then
-    # Check whether migration 002 has been applied (api_key_platform table exists).
-    _acl_present=0
-    if [ -f "$GATEWAY_DB_CHECK" ] && command -v sqlite3 >/dev/null; then
-      _tbl="$(sqlite3 "$GATEWAY_DB_CHECK" "SELECT name FROM sqlite_master WHERE type='table' AND name='api_key_platform';" 2>/dev/null || true)"
-      [ -n "$_tbl" ] && _acl_present=1
-    fi
-    if [ "$_acl_present" -eq 0 ]; then
-      warn "Please review: your llm_api_key now represents the gateway's upstream provider credential (z.ai, etc.), not your client-facing gateway key. If you previously used llm_api_key for a different purpose, edit ~/.hermit/settings.json. See docs/cc-setup.md § new-two-endpoint-model."
-    fi
+    print("")
+    sys.exit(0)
+has_flat = bool(d.get("llm_api_key") or d.get("llm_url"))
+has_providers = bool(d.get("providers"))
+print(f"{int(has_flat)},{int(has_providers)}")
+PY
+)"
+  _has_flat="${_legacy_state%%,*}"
+  _has_providers="${_legacy_state##*,}"
+  if [ "${_has_flat:-0}" = "1" ] && [ "${_has_providers:-0}" != "1" ]; then
+    warn "Please review: flat llm_url/llm_api_key in ~/.hermit/settings.json are superseded by the providers dict (docs/cc-setup.md § providers-schema). Migrating now …"
+    python3 - "$SETTINGS_FILE_CHECK" <<'PY' || warn "Automatic migration failed; edit ~/.hermit/settings.json manually to use the providers dict."
+import json, os, sys
+path = sys.argv[1]
+try:
+    d = json.load(open(path))
+except Exception:
+    sys.exit(1)
+flat_url = d.pop("llm_url", "") or ""
+flat_key = d.pop("llm_api_key", "") or ""
+providers = d.get("providers") or {}
+slug = "z.ai" if "z.ai" in flat_url else "legacy"
+block = providers.setdefault(slug, {})
+block.setdefault("base_url", flat_url)
+block.setdefault("api_key", flat_key)
+d["providers"] = providers
+# Backup once before rewriting so the user can recover.
+bak = path + ".backup-pre-providers"
+if not os.path.exists(bak):
+    try:
+        os.rename(path, bak)  # move once; then write fresh
+    except OSError:
+        import shutil
+        shutil.copyfile(path, bak)
+with open(path, "w") as f:
+    json.dump(d, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print(f"  Lifted flat llm_* into providers[{slug!r}] (backup: {bak})")
+PY
   fi
 fi
 
@@ -253,11 +279,24 @@ fi
 #     above AND the settings file does not already have an
 #     llm_api_key. Add new providers by extending the PROVIDERS array.
 if [ "$LOCAL_MODEL_READY" -eq 0 ]; then
-  EXISTING_KEY="$(python3 -c "import json; print(json.load(open('$SETTINGS_FILE')).get('llm_api_key',''))" 2>/dev/null || true)"
-  if [ -z "$EXISTING_KEY" ]; then
-    # Provider catalogue: "<slug>|<label>|<llm_url>|<default_model>"
+  EXISTING_CRED="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$SETTINGS_FILE'))
+except Exception:
+    print('')
+    sys.exit(0)
+providers = d.get('providers') or {}
+has_any = any(isinstance(v, dict) and v.get('api_key') for v in providers.values())
+print('yes' if has_any else '')
+" 2>/dev/null || true)"
+  if [ -z "$EXISTING_CRED" ]; then
+    # Provider catalogue:
+    #   "<slug>|<label>|<base_url>|<default_model>|<anthropic_base_url>"
+    # The `anthropic_base_url` column is optional — leave it empty when the
+    # provider does not expose an Anthropic-compat endpoint.
     PROVIDERS=(
-      "zai|z.ai (GLM-5.1, Anthropic-compatible)|https://api.z.ai/api/coding/paas/v4|glm-5.1"
+      "z.ai|z.ai (GLM-5.1, Anthropic-compatible)|https://api.z.ai/api/coding/paas/v4|glm-5.1|https://api.z.ai/api/anthropic"
     )
     printf "\033[1;36m▸\033[0m No local model configured. Pick an external provider?\n"
     idx=1
@@ -273,41 +312,53 @@ if [ "$LOCAL_MODEL_READY" -eq 0 ]; then
 
     case "$provider_choice" in
       s|skip|"")
-        PENDING_STEPS+=("Set llm_url / llm_api_key / model in $SETTINGS_FILE, or pull an ollama model, to give Hermit an LLM to talk to.")
+        PENDING_STEPS+=("Add a providers[<slug>] block in $SETTINGS_FILE or pull an ollama model to give Hermit an LLM to talk to.")
         ;;
       *)
-        # Accept numeric choice only.
         if ! [[ "$provider_choice" =~ ^[0-9]+$ ]] || \
            [ "$provider_choice" -lt 1 ] || \
            [ "$provider_choice" -gt "${#PROVIDERS[@]}" ]; then
           warn "Unknown provider choice '$provider_choice' — skipping."
-          PENDING_STEPS+=("Set llm_url / llm_api_key / model in $SETTINGS_FILE manually.")
+          PENDING_STEPS+=("Add a providers[<slug>] block in $SETTINGS_FILE manually.")
         else
           row="${PROVIDERS[$((provider_choice - 1))]}"
+          provider_slug="$(printf '%s' "$row" | cut -d'|' -f1)"
           provider_label="$(printf '%s' "$row" | cut -d'|' -f2)"
           provider_url="$(printf '%s' "$row" | cut -d'|' -f3)"
           provider_model="$(printf '%s' "$row" | cut -d'|' -f4)"
+          provider_anth="$(printf '%s' "$row" | cut -d'|' -f5)"
 
           printf "   Paste your API key for %s (input hidden): " "$provider_label"
           read -rs api_key || api_key=""
           echo
           if [ -z "$api_key" ]; then
             warn "No API key entered — skipping."
-            PENDING_STEPS+=("Add the $provider_label API key as llm_api_key in $SETTINGS_FILE when you have it.")
+            PENDING_STEPS+=("Add providers[\"$provider_slug\"].api_key in $SETTINGS_FILE when you have it.")
           else
-            python3 - "$SETTINGS_FILE" "$provider_url" "$provider_model" "$api_key" <<'PYEOF'
+            python3 - "$SETTINGS_FILE" "$provider_slug" "$provider_url" "$provider_model" "$api_key" "$provider_anth" <<'PYEOF'
 import json, sys
-path, url, model, key = sys.argv[1:5]
+path, slug, base_url, model, key, anth = sys.argv[1:7]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
-data["llm_url"] = url
+providers = data.get("providers") or {}
+if not isinstance(providers, dict):
+    providers = {}
+block = providers.get(slug) or {}
+block["base_url"] = base_url
+block["api_key"] = key
+if anth:
+    block["anthropic_base_url"] = anth
+providers[slug] = block
+data["providers"] = providers
 data["model"] = model
-data["llm_api_key"] = key
+# Legacy flat fields are superseded — drop them so settings stays clean.
+data.pop("llm_url", None)
+data.pop("llm_api_key", None)
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
     f.write("\n")
 PYEOF
-            say "Saved $provider_label credentials to $SETTINGS_FILE (model=$provider_model)."
+            say "Saved $provider_label credentials to $SETTINGS_FILE under providers[\"$provider_slug\"] (model=$provider_model)."
           fi
         fi
         ;;

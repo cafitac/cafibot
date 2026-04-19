@@ -75,10 +75,12 @@ try:
 except Exception:
     sys.exit(0)
 
+from hermit_agent.config import select_llm_endpoint
 cfg = load_settings(cwd=os.environ.get("PWD"))
 model = cfg.get("model", "")
-llm_url = cfg.get("llm_url", "")
-api_key = cfg.get("llm_api_key", "")
+# select_llm_endpoint resolves the active (base_url, api_key) for the
+# model — ollama for `name:tag`, providers[<slug>] for cloud prefixes.
+llm_url, api_key = select_llm_endpoint(model, cfg)
 
 def _suggest_alternatives(current_model: str) -> list[str]:
     """Collect reachable model ids the user could try instead."""
