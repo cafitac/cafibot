@@ -153,15 +153,83 @@ fi
 #    working z.ai / cloud-only setup don't need a local model, and a
 #    misconfigured OLLAMA_MODELS (pointing at unmounted external
 #    storage, etc.) should not abort the rest of the install.
+LOCAL_MODEL_READY=0
 if [ "$SKIP_OLLAMA" -eq 0 ] && command -v ollama >/dev/null; then
   printf "\033[1;36m▸\033[0m Pull a local coding model via ollama? [y/N] "
   read -r reply || reply="n"
   if [[ "$reply" =~ ^[Yy]$ ]]; then
     say "Pulling qwen3-coder:30b (this can take a while — ~18GB)"
-    if ! ollama pull qwen3-coder:30b; then
+    if ollama pull qwen3-coder:30b; then
+      LOCAL_MODEL_READY=1
+    else
       warn "ollama pull failed. Check OLLAMA_MODELS and the path it points to."
-      warn "Hermit runs fine with a cloud executor alone — leave model=glm-5.1 (or similar) in ~/.hermit/settings.json to skip local models."
     fi
+  fi
+fi
+
+# 6.5 external provider — offered when no local model was configured
+#     above AND the settings file does not already have an
+#     llm_api_key. Add new providers by extending the PROVIDERS array.
+if [ "$LOCAL_MODEL_READY" -eq 0 ]; then
+  EXISTING_KEY="$(python3 -c "import json; print(json.load(open('$SETTINGS_FILE')).get('llm_api_key',''))" 2>/dev/null || true)"
+  if [ -z "$EXISTING_KEY" ]; then
+    # Provider catalogue: "<slug>|<label>|<llm_url>|<default_model>"
+    PROVIDERS=(
+      "zai|z.ai (GLM-5.1, Anthropic-compatible)|https://api.z.ai/api/paas/v4|glm-5.1"
+    )
+    printf "\033[1;36m▸\033[0m No local model configured. Pick an external provider?\n"
+    idx=1
+    for row in "${PROVIDERS[@]}"; do
+      label="$(printf '%s' "$row" | cut -d'|' -f2)"
+      printf "   (%d) %s\n" "$idx" "$label"
+      idx=$((idx + 1))
+    done
+    printf "   (s) Skip (configure ~/.hermit/settings.json manually later)\n"
+    printf "   [1/s]: "
+    read -r provider_choice || provider_choice="s"
+    provider_choice="$(echo "${provider_choice:-s}" | tr '[:upper:]' '[:lower:]')"
+
+    case "$provider_choice" in
+      s|skip|"")
+        PENDING_STEPS+=("Set llm_url / llm_api_key / model in $SETTINGS_FILE, or pull an ollama model, to give Hermit an LLM to talk to.")
+        ;;
+      *)
+        # Accept numeric choice only.
+        if ! [[ "$provider_choice" =~ ^[0-9]+$ ]] || \
+           [ "$provider_choice" -lt 1 ] || \
+           [ "$provider_choice" -gt "${#PROVIDERS[@]}" ]; then
+          warn "Unknown provider choice '$provider_choice' — skipping."
+          PENDING_STEPS+=("Set llm_url / llm_api_key / model in $SETTINGS_FILE manually.")
+        else
+          row="${PROVIDERS[$((provider_choice - 1))]}"
+          provider_label="$(printf '%s' "$row" | cut -d'|' -f2)"
+          provider_url="$(printf '%s' "$row" | cut -d'|' -f3)"
+          provider_model="$(printf '%s' "$row" | cut -d'|' -f4)"
+
+          printf "   Paste your API key for %s (input hidden): " "$provider_label"
+          read -rs api_key || api_key=""
+          echo
+          if [ -z "$api_key" ]; then
+            warn "No API key entered — skipping."
+            PENDING_STEPS+=("Add the $provider_label API key as llm_api_key in $SETTINGS_FILE when you have it.")
+          else
+            python3 - "$SETTINGS_FILE" "$provider_url" "$provider_model" "$api_key" <<'PYEOF'
+import json, sys
+path, url, model, key = sys.argv[1:5]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+data["llm_url"] = url
+data["model"] = model
+data["llm_api_key"] = key
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PYEOF
+            say "Saved $provider_label credentials to $SETTINGS_FILE (model=$provider_model)."
+          fi
+        fi
+        ;;
+    esac
   fi
 fi
 

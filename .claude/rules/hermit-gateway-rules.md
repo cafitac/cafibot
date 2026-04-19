@@ -24,8 +24,9 @@ Applies only to `hermit_agent/gateway/` package.
 
 ## Configuration Management [P2]
 
-- All env vars read from `hermit_agent/gateway/config.py`. No hardcoded URLs/keys.
-- New provider: (1) `LLMClientBase` impl, (2) name-prefix mapping, (3) document in `.env.example`.
+- All runtime settings are loaded via `hermit_agent/config.py::load_settings()`. No hardcoded URLs/keys.
+- `~/.hermit/settings.json` is the single source of truth — `.env` files are not read by the launchers.
+- New provider: (1) `LLMClientBase` impl, (2) name-prefix mapping, (3) add to the provider menu in `install.sh` and document it in `README.md`.
 
 ## Testing [P2]
 
