@@ -25,6 +25,7 @@ class GatewayTaskState:
     status: str = "running"       # running | waiting | done | error | cancelled
     result: str | None = None
     token_totals: dict = field(default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0})
+    parent_session_id: str | None = None
     created_at: float = field(default_factory=time.monotonic)
     TTL_SECONDS: int = 3600
 

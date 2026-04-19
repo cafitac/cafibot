@@ -150,6 +150,14 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
     # Create a new Event per task → prevent shutdown race
     sse_shutdown: threading.Event = threading.Event()
 
+    # ── TUI session logging ──
+    import uuid as _uuid
+    from .session_store import SessionStore
+    from .session_logger import SessionLogger as _SessionLogger
+    session_id = _uuid.uuid4().hex[:12]
+    session_dir = SessionStore().create_session(mode='tui', session_id=session_id, cwd=args.cwd)
+    session_logger = _SessionLogger(session_dir=session_dir)
+
 
     def _stdin_reader() -> None:
         for raw_line in sys.stdin:
@@ -182,6 +190,7 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
             if t == "done":
                 # done SSE result field → TUI text event (final response)
                 result_text = (msg.get("result") or "").strip()
+                session_logger.on_send(msg)  # capture final assistant response
                 if result_text:
                     _send({"type": "text", "content": result_text})
                 _send({"type": "stream_end"})
@@ -189,10 +198,12 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
                 _send({"type": "done"})
             elif t in ("error", "cancelled"):
                 _dispatch_sse_to_tui(msg)
+                session_logger.on_send(msg)
                 current_task_id = None
                 _send({"type": "done"})
             else:
                 _dispatch_sse_to_tui(msg)
+                session_logger.on_send(msg)
             continue
 
         # Handle stdin messages
@@ -202,6 +213,10 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
             if current_task_id:
                 client.cancel(current_task_id)
             client.close()
+            try:
+                SessionStore().update_meta(session_dir, status='completed')
+            except Exception:
+                pass
             _send({"type": "done"})
             break
 
@@ -229,6 +244,8 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
             if not text:
                 continue
 
+            session_logger.on_user_input(text)  # capture user message even if gateway fails
+
             # user_input in waiting state → processed as reply
             if current_task_id:
                 client.reply(current_task_id, text)
@@ -238,7 +255,7 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
             try:
                 resp = client._client.post(
                     f"{client.base_url}/tasks",
-                    json={"task": text, "cwd": args.cwd, "model": args.model, "max_turns": args.max_turns},
+                    json={"task": text, "cwd": args.cwd, "model": args.model, "max_turns": args.max_turns, "parent_session_id": session_id},
                     headers=client._headers,
                 )
                 resp.raise_for_status()

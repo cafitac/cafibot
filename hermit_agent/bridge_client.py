@@ -36,11 +36,14 @@ class GatewayClient:
         except Exception:
             return False
 
-    def create_task(self, task: str, cwd: str, model: str, max_turns: int) -> str:
+    def create_task(self, task: str, cwd: str, model: str, max_turns: int, parent_session_id: str | None = None) -> str:
         """POST /tasks → returns task_id."""
+        body: dict = {"task": task, "cwd": cwd, "model": model, "max_turns": max_turns}
+        if parent_session_id is not None:
+            body["parent_session_id"] = parent_session_id
         r = self._client.post(
             f"{self.base_url}/tasks",
-            json={"task": task, "cwd": cwd, "model": model, "max_turns": max_turns},
+            json=body,
             headers=self._headers,
         )
         r.raise_for_status()

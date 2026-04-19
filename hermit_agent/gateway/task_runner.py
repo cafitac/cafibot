@@ -12,6 +12,7 @@ from .sse import SSEEvent, SSEManager
 from .task_store import GatewayTaskState, release_worker_slot
 from .permission import GatewayPermissionChecker
 from .db import insert_usage
+from .session_log import GatewaySessionLog
 
 logger = logging.getLogger("hermit_agent.gateway.runner")
 
@@ -21,8 +22,9 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
-def _make_emitter_handler(task_id: str, sse: SSEManager):
-    """Handler that converts AgentLoop emitter events to SSE events."""
+def _make_emitter_handler(task_id: str, sse: SSEManager, gw_log: GatewaySessionLog | None = None):
+    """Handler that converts AgentLoop emitter events to SSE events.
+    Also forwards non-streaming events to the GatewaySessionLog."""
     def handler(event_type: str, data: dict):
         if event_type == "streaming":
             sse.publish_threadsafe(task_id, SSEEvent(type="streaming", token=data.get("token", "")))
@@ -48,6 +50,9 @@ def _make_emitter_handler(task_id: str, sse: SSEManager):
                 ) if k in data
             }
             sse.publish_threadsafe(task_id, SSEEvent(type="status", **status_fields))
+        # Forward non-streaming events to gateway session log
+        if gw_log is not None and event_type not in ("streaming", "stream_end"):
+            gw_log.write_event({"type": event_type, **data})
         # progress events are handled by the existing progress_hook
     return handler
 
@@ -128,9 +133,15 @@ def _run(
         ),
         permission_checker=checker,
         max_turns=max_turns,
+        parent_session_id=state.parent_session_id,
     )
 
-    session.set_emitter_handler(_make_emitter_handler(task_id, sse))
+    # Per-task structured event logging (additive — does not replace stdlib logger or SSE)
+    gw_log = GatewaySessionLog(
+        task_id=task_id, cwd=cwd, model=model,
+        parent_session_id=state.parent_session_id,
+    )
+    session.set_emitter_handler(_make_emitter_handler(task_id, sse, gw_log))
 
     try:
         session.run(task)
@@ -138,10 +149,12 @@ def _run(
             state.status = "cancelled"
         elif state.status not in ("done", "error"):
             state.status = "done"
+        gw_log.mark_completed(state.token_totals)
     except Exception as e:
         logger.exception("task %s failed: %s", task_id, e)
         state.status = "error"
         sse.publish_threadsafe(task_id, SSEEvent(type="error", message=str(e)))
+        gw_log.mark_crashed(str(e))
     finally:
         release_worker_slot()
 

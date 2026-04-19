@@ -12,9 +12,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hermit_agent.session_logger import SessionLogger, SubAgentLogger
 
 
+def _make_session_dir(tmp: str) -> str:
+    session_dir = os.path.join(tmp, ".hermit", "session")
+    os.makedirs(session_dir, exist_ok=True)
+    return session_dir
+
+
 def test_subagent_logger_creates_jsonl_and_meta():
     with tempfile.TemporaryDirectory() as tmp:
-        parent = SessionLogger(cwd=tmp)
+        parent = SessionLogger(session_dir=_make_session_dir(tmp))
         sub = parent.create_subagent_logger(
             agent_id="abc123",
             agent_type="explore",
@@ -40,7 +46,7 @@ def test_subagent_logger_creates_jsonl_and_meta():
 def test_subagent_dispatch_attachment_in_parent():
     """A subagent_dispatch attachment remains in the parent session.jsonl."""
     with tempfile.TemporaryDirectory() as tmp:
-        parent = SessionLogger(cwd=tmp)
+        parent = SessionLogger(session_dir=_make_session_dir(tmp))
         parent.create_subagent_logger("xyz", "executor", "implement feature X")
 
         records = []
@@ -61,7 +67,7 @@ def test_subagent_dispatch_attachment_in_parent():
 
 def test_subagent_finish_writes_meta():
     with tempfile.TemporaryDirectory() as tmp:
-        parent = SessionLogger(cwd=tmp)
+        parent = SessionLogger(session_dir=_make_session_dir(tmp))
         sub = parent.create_subagent_logger("aa", "explore", "desc")
         sub.finish(result_summary="found 3 files")
 

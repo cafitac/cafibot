@@ -46,7 +46,9 @@ def _read_jsonl(path: str) -> list[dict]:
 
 def _make_agent_with_logger(cwd: str) -> tuple[AgentLoop, SessionLogger]:
     tools = create_default_tools(cwd=cwd)
-    logger = SessionLogger(cwd=cwd)
+    session_dir = os.path.join(cwd, ".hermit", "session")
+    os.makedirs(session_dir, exist_ok=True)
+    logger = SessionLogger(session_dir=session_dir)
     agent = AgentLoop(
         llm=_StubLLM(),
         tools=tools,

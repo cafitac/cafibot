@@ -21,7 +21,7 @@ import sys
 from .agent_session import CLIAgentSession
 from .llm_client import create_llm_client
 from .permissions import PermissionMode
-from .session import save_session
+from .session_store import SessionStore, _atomic_write_json
 
 _GATEWAY_DEFAULT_URL = "http://localhost:8765/v1"
 
@@ -62,20 +62,25 @@ def parse_args(argv=None):
 
 def run_single(agent: AgentLoop, message: str):
     """Single message mode."""
+    store = SessionStore()
+    sd = store.create_session(mode='single', session_id=agent.session_id, cwd=agent.cwd, model=agent.llm.model)
     try:
         response = agent.run(message)
         if not agent.streaming:
             print(response)
         if agent.messages:
             try:
-                save_session(
-                    session_id=agent.session_id,
-                    messages=agent.messages,
-                    system_prompt=agent.system_prompt,
-                    model=agent.llm.model,
-                    cwd=agent.cwd,
-                    turn_count=agent.turn_count,
+                _atomic_write_json(
+                    os.path.join(sd, 'messages.json'),
+                    agent.messages,
                 )
+                # Extract preview from first user message
+                preview = ''
+                for msg in agent.messages:
+                    if msg.get('role') == 'user' and isinstance(msg.get('content'), str):
+                        preview = msg['content'][:80]
+                        break
+                store.update_meta(sd, status='completed', turn_count=agent.turn_count, preview=preview)
             except Exception:
                 pass
     except KeyboardInterrupt:
@@ -155,14 +160,23 @@ def main():
                 print()
             if session._agent and session._agent.messages:
                 try:
-                    save_session(
+                    store = SessionStore()
+                    sd = store.create_session(
+                        mode='single',
                         session_id=session._agent.session_id,
-                        messages=session._agent.messages,
-                        system_prompt=session._agent.system_prompt,
-                        model=llm.model,
                         cwd=args.cwd,
-                        turn_count=session._agent.turn_count,
+                        model=llm.model,
                     )
+                    _atomic_write_json(
+                        os.path.join(sd, 'messages.json'),
+                        session._agent.messages,
+                    )
+                    preview = ''
+                    for msg in session._agent.messages:
+                        if msg.get('role') == 'user' and isinstance(msg.get('content'), str):
+                            preview = msg['content'][:80]
+                            break
+                    store.update_meta(sd, status='completed', turn_count=session._agent.turn_count, preview=preview)
                 except Exception:
                     pass
         except KeyboardInterrupt:
