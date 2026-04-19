@@ -74,6 +74,7 @@ class TaskRequest(BaseModel):
     cwd: str = ""
     model: str = ""
     max_turns: int = 200
+    parent_session_id: str | None = None
 
 
 class ReplyRequest(BaseModel):
@@ -130,6 +131,7 @@ async def create_task_endpoint(
     model = req.model or cfg.get("model", "glm-5.1")
 
     state = create_task(task_id)
+    state.parent_session_id = req.parent_session_id
 
     sse_manager.register(task_id)  # register before starting background task to prevent race
 

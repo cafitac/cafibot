@@ -10,7 +10,9 @@ import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Optional
 
+from .session_store import SessionStore
 
 SESSION_DIR = os.path.expanduser("~/.hermit/sessions")
 LATEST_LINK = os.path.join(SESSION_DIR, "latest.json")
@@ -34,6 +36,7 @@ class SavedSession:
     system_prompt: str
 
 
+# Legacy: retained for read-compat with old session files
 def save_session(
     session_id: str,
     messages: list[dict],
@@ -81,6 +84,7 @@ def save_session(
 
 def load_session(session_id: str | None = None) -> SavedSession | None:
     """Restore session. If session_id is None, loads the most recent session."""
+    store = SessionStore()
     if session_id is None:
         if not os.path.exists(LATEST_LINK):
             return None
@@ -90,39 +94,50 @@ def load_session(session_id: str | None = None) -> SavedSession | None:
         if not session_id:
             return None
 
-    filepath = os.path.join(SESSION_DIR, f"{session_id}.json")
-    if not os.path.exists(filepath):
+    result = store.load_session(session_id)
+    if result is None:
         return None
 
-    with open(filepath) as f:
-        data = json.load(f)
-
-    meta = SessionMeta(**data["meta"])
+    raw_meta = result['meta']
+    # Convert ISO timestamps back to epoch for SessionMeta compat
+    from .session_store import _parse_updated_at
+    created_at = _parse_updated_at(raw_meta) if isinstance(raw_meta.get('created_at'), str) else raw_meta.get('created_at', 0.0)
+    updated_at = _parse_updated_at(raw_meta) if isinstance(raw_meta.get('updated_at'), str) else raw_meta.get('updated_at', 0.0)
+    meta = SessionMeta(
+        session_id=raw_meta['session_id'],
+        model=raw_meta.get('model', ''),
+        cwd=raw_meta.get('cwd', ''),
+        created_at=created_at,
+        updated_at=updated_at,
+        turn_count=raw_meta.get('turn_count', 0),
+        preview=raw_meta.get('preview', ''),
+    )
     return SavedSession(
         meta=meta,
-        messages=data["messages"],
-        system_prompt=data["system_prompt"],
+        messages=result.get('messages') or [],
+        system_prompt=result.get('system_prompt', ''),
     )
 
 
 def list_sessions(limit: int = 10) -> list[SessionMeta]:
     """List recent sessions."""
-    if not os.path.exists(SESSION_DIR):
-        return []
-
-    sessions = []
-    for f in Path(SESSION_DIR).glob("*.json"):
-        if f.name == "latest.json":
-            continue
-        try:
-            with open(f) as fh:
-                data = json.load(fh)
-            sessions.append(SessionMeta(**data["meta"]))
-        except Exception:
-            continue
-
-    sessions.sort(key=lambda s: s.updated_at, reverse=True)
-    return sessions[:limit]
+    store = SessionStore()
+    raw_list = store.list_sessions(limit=limit)
+    sessions: list[SessionMeta] = []
+    for raw_meta in raw_list:
+        from .session_store import _parse_updated_at
+        created_at = _parse_updated_at(raw_meta) if isinstance(raw_meta.get('created_at'), str) else raw_meta.get('created_at', 0.0)
+        updated_at = _parse_updated_at(raw_meta) if isinstance(raw_meta.get('updated_at'), str) else raw_meta.get('updated_at', 0.0)
+        sessions.append(SessionMeta(
+            session_id=raw_meta['session_id'],
+            model=raw_meta.get('model', ''),
+            cwd=raw_meta.get('cwd', ''),
+            created_at=created_at,
+            updated_at=updated_at,
+            turn_count=raw_meta.get('turn_count', 0),
+            preview=raw_meta.get('preview', ''),
+        ))
+    return sessions
 
 
 def delete_session(session_id: str) -> bool:

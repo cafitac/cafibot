@@ -471,6 +471,7 @@ class AgentLoop:
         response_language: str = "English",
         seed_handoff: bool = True,
         auto_wrap: bool = True,
+        session_id: str | None = None,
     ):
         self.llm = llm
         self.emitter = AgentEventEmitter()
@@ -507,7 +508,7 @@ class AgentLoop:
         self.pinned_reminders: list[dict] = []  # G41: {"key": str, "content": str}
         self.turn_count = 0
         self._tool_call_count = 0  # cumulative tool call count in session (self-learning trigger)
-        self.session_id = uuid.uuid4().hex[:12]
+        self.session_id = session_id if session_id is not None else uuid.uuid4().hex[:12]
         self.streaming = True
         self.pending_user_messages: list[str] = []  # btw: queue of user messages received mid-run
         self._used_extended_tools = False  # whether extended tools were used (dynamic tool loading)

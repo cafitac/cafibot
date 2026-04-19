@@ -12,6 +12,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hermit_agent.session_logger import SessionLogger
 
 
+def _make_session_dir(tmp: str) -> str:
+    session_dir = os.path.join(tmp, ".hermit", "session")
+    os.makedirs(session_dir, exist_ok=True)
+    return session_dir
+
+
 def _read_jsonl(path: str) -> list[dict]:
     records = []
     with open(path, encoding="utf-8") as f:
@@ -25,14 +31,15 @@ def _read_jsonl(path: str) -> list[dict]:
 
 def test_jsonl_file_is_created():
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
+        logger.log_user("init")  # trigger lazy file creation
         assert os.path.exists(logger.jsonl_path)
         assert logger.jsonl_path.endswith(".jsonl")
 
 
 def test_user_record_format():
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_user("hello world")
         records = _read_jsonl(logger.jsonl_path)
         user_records = [r for r in records if r.get("type") == "user"]
@@ -45,7 +52,7 @@ def test_user_record_format():
 
 def test_assistant_record_has_content_list():
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_assistant_text("summary: done 1 thing")
         records = _read_jsonl(logger.jsonl_path)
         ar = [r for r in records if r.get("type") == "assistant"]
@@ -58,7 +65,7 @@ def test_assistant_record_has_content_list():
 
 def test_tool_use_and_tool_result_records():
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_tool_use("use_1", "bash", {"command": "ls"})
         logger.log_tool_result("use_1", "file.txt\n", is_error=False)
         records = _read_jsonl(logger.jsonl_path)
@@ -78,7 +85,7 @@ def test_tool_use_and_tool_result_records():
 
 def test_attachment_record():
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_attachment("compact", "~22k tokens compacted")
         records = _read_jsonl(logger.jsonl_path)
         att = [r for r in records if r.get("type") == "attachment"]
@@ -89,7 +96,7 @@ def test_attachment_record():
 
 def test_permission_mode_record():
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_permission_mode("yolo")
         records = _read_jsonl(logger.jsonl_path)
         pm = [r for r in records if r.get("type") == "permission-mode"]
@@ -100,7 +107,7 @@ def test_permission_mode_record():
 def test_text_session_log_is_not_written():
     """session.log (text) is no longer generated — JSONL is the only log."""
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_user("hi")
         # Structure simplification: remove .path attribute, no session.log file generation
         assert not hasattr(logger, "path") or not os.path.exists(getattr(logger, "path", ""))

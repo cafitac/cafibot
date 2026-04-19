@@ -12,10 +12,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hermit_agent.session_logger import SessionLogger
 
 
+def _make_session_dir(tmp: str) -> str:
+    session_dir = os.path.join(tmp, ".hermit", "session")
+    os.makedirs(session_dir, exist_ok=True)
+    return session_dir
+
+
 def test_log_assistant_text_writes_to_jsonl_only():
     """session.log removal — assistant text remains only in the JSONL."""
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_assistant_text("Task complete. Suggested next step: ...")
         # Text log file is not created
         session_log = os.path.join(tmp, ".hermit", "session.log")
@@ -28,7 +34,7 @@ def test_log_assistant_text_writes_to_jsonl_only():
 
 def test_log_assistant_text_writes_to_jsonl():
     with tempfile.TemporaryDirectory() as tmp:
-        logger = SessionLogger(cwd=tmp)
+        logger = SessionLogger(session_dir=_make_session_dir(tmp))
         logger.log_assistant_text("Summary message")
         records = []
         with open(logger.jsonl_path, encoding="utf-8") as f:

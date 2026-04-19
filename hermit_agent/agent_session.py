@@ -104,7 +104,15 @@ class AgentSessionBase(ABC):
         """Inject SessionLogger into LLM + emitter."""
         try:
             from .session_logger import SessionLogger
-            logger = SessionLogger(cwd=self.cwd)
+            from .session_store import SessionStore
+            store = SessionStore()
+            session_dir = store.create_session(
+                mode=self._session_mode,
+                session_id=self._agent.session_id,
+                cwd=self.cwd,
+                parent_session_id=getattr(self, 'parent_session_id', None),
+            )
+            logger = SessionLogger(session_dir=session_dir)
             self.llm.session_logger = logger
             if self._agent and hasattr(self._agent, "emitter"):
                 self._agent.emitter.session_logger = logger
@@ -191,6 +199,8 @@ class MCPAgentSession(AgentSessionBase):
     - progress hook: channel notifications keyed by task_id
     """
 
+    _session_mode = 'gateway'
+
     def __init__(
         self,
         llm: "LLMClientBase",
@@ -204,6 +214,7 @@ class MCPAgentSession(AgentSessionBase):
         notify_error_fn: Callable,          # (task_id, message) → None
         permission_checker=None,            # MCPPermissionChecker instance (DI, prevent circular imports)
         max_turns: int = 200,
+        parent_session_id: str | None = None,
     ):
         from .permissions import PermissionMode
         super().__init__(
@@ -221,6 +232,7 @@ class MCPAgentSession(AgentSessionBase):
         self._notify_done_fn = notify_done_fn
         self._notify_error_fn = notify_error_fn
         self._permission_checker = permission_checker
+        self.parent_session_id = parent_session_id
         self._emitter_handler = None  # injected after _setup_agent (use set_emitter_handler)
         llm._cancel_event = state.cancel_event
 
@@ -385,6 +397,8 @@ class CLIAgentSession(AgentSessionBase):
     - streaming: uses AgentLoop streaming mode
     - Self-learning included (verify_cmd only, no pytest unlike BridgeAgentSession)
     """
+
+    _session_mode = 'single'
 
     def __init__(
         self,

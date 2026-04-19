@@ -36,15 +36,12 @@ class SessionLogger:
     Thread-safe (Lock-protected).
     """
 
-    def __init__(self, cwd: str, session_id: str | None = None) -> None:
-        hermit_agent_dir = os.path.join(cwd, ".hermit")
-        os.makedirs(hermit_agent_dir, exist_ok=True)
-        self.session_id = session_id or uuid.uuid4().hex
-        self.jsonl_path = os.path.join(hermit_agent_dir, "session.jsonl")
-        self.subagents_dir = os.path.join(hermit_agent_dir, "subagents")
+    def __init__(self, session_dir: str) -> None:
+        self.session_dir = session_dir
+        self.session_id = os.path.basename(session_dir)
+        self.jsonl_path = os.path.join(session_dir, "events.jsonl")
+        self.subagents_dir = os.path.join(session_dir, "subagents")
         self._lock = threading.Lock()
-        # Initialize JSONL (empty file, no session start marker)
-        open(self.jsonl_path, "w", encoding="utf-8").close()
 
     # ── Low-level write ────────────────────────────
 
@@ -205,6 +202,7 @@ class SubAgentLogger:
             "parent_session_id": parent_session_id,
             "started_at": _now_iso(),
         }
+        # Truncate is safe: each subagent gets a unique agent_id → fresh file
         open(self.jsonl_path, "w", encoding="utf-8").close()
         self._write_meta()
 
