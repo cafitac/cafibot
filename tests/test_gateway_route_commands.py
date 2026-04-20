@@ -67,6 +67,24 @@ async def test_create_task_endpoint_schedules_background_work_for_normal_tasks()
 
 
 @pytest.mark.anyio
+async def test_create_task_endpoint_returns_server_busy_error_when_no_worker_slot(monkeypatch):
+    from hermit_agent.gateway.routes import tasks as tasks_mod
+    from hermit_agent.gateway.routes.tasks import TaskRequest, create_task_endpoint
+
+    monkeypatch.setattr(tasks_mod, "acquire_worker_slot", lambda: False)
+
+    with pytest.raises(HTTPException) as exc:
+        await create_task_endpoint(
+            req=TaskRequest(task="do work", cwd="", model="", max_turns=2),
+            background=BackgroundTasks(),
+            auth=SimpleNamespace(user="tester"),
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail["code"] == "server_busy"
+
+
+@pytest.mark.anyio
 async def test_reply_status_and_cancel_routes_use_real_task_state():
     from hermit_agent.gateway.routes.tasks import (
         ReplyRequest,
