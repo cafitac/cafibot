@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import BackgroundTasks
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 
@@ -121,5 +122,49 @@ async def test_stream_task_returns_sse_response_for_registered_task():
         assert response.headers["x-task-id"] == task_id
         assert response.headers["cache-control"] == "no-cache"
         assert response.headers["connection"] == "keep-alive"
+    finally:
+        delete_task(task_id)
+
+
+@pytest.mark.anyio
+async def test_missing_task_routes_raise_not_found():
+    from hermit_agent.gateway.routes.tasks import (
+        cancel_task,
+        get_task_status,
+        reply_task,
+        stream_task,
+        ReplyRequest,
+    )
+
+    auth = SimpleNamespace(user="tester")
+
+    for call in (
+        lambda: get_task_status(task_id="missing-task", auth=auth),
+        lambda: stream_task(task_id="missing-task", auth=auth),
+        lambda: reply_task(task_id="missing-task", req=ReplyRequest(message="yes"), auth=auth),
+        lambda: cancel_task(task_id="missing-task", auth=auth),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 404
+        assert exc.value.detail["code"] == "task_not_found"
+
+
+@pytest.mark.anyio
+async def test_reply_route_rejects_non_waiting_task():
+    from hermit_agent.gateway.routes.tasks import ReplyRequest, reply_task
+    from hermit_agent.gateway.task_runtime import create_registered_task_state
+    from hermit_agent.gateway.task_store import delete_task
+
+    auth = SimpleNamespace(user="tester")
+    task_id, state = create_registered_task_state()
+    state.status = "running"
+
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await reply_task(task_id=task_id, req=ReplyRequest(message="yes"), auth=auth)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "task_already_done"
+        assert "waiting state" in exc.value.detail["message"]
     finally:
         delete_task(task_id)
