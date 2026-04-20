@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from hermit_agent.gateway.task_models import AUTO_MODEL_SENTINEL, normalize_requested_model
+from hermit_agent.gateway.task_models import (
+    AUTO_MODEL_SENTINEL,
+    normalize_requested_model,
+    normalize_task_cwd,
+)
 from hermit_agent.gateway.task_runner import _is_auto_model
 
 
@@ -24,3 +28,14 @@ def test_is_auto_model_accepts_auto_aliases():
 
 def test_is_auto_model_rejects_explicit_model_names():
     assert _is_auto_model("glm-5.1") is False
+
+
+def test_normalize_task_cwd_uses_os_getcwd_for_blank_inputs(monkeypatch):
+    monkeypatch.setattr("os.getcwd", lambda: "/tmp/current")
+
+    assert normalize_task_cwd("") == "/tmp/current"
+    assert normalize_task_cwd(None) == "/tmp/current"
+
+
+def test_normalize_task_cwd_preserves_explicit_path():
+    assert normalize_task_cwd("/tmp/work") == "/tmp/work"
