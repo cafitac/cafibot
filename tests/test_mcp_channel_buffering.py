@@ -33,7 +33,7 @@ def _stop_loop(loop, thread):
 
 
 def test_channel_notifications_buffer_until_session_is_attached():
-    import hermit_agent.mcp_server as m
+    import hermit_agent.mcp_channel as m
 
     with m._session_lock:
         m._current_session = None
