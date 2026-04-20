@@ -143,17 +143,28 @@ class _SSEBridge(_BaseSSEBridge):
     """mcp_server-local wrapper preserving existing test patch points."""
 
     def __init__(self, task_id: str, client: httpx.Client):
+        def _dispatch_action(task_id: str, action) -> None:
+            if action.kind == "prompt":
+                _notify_channel(task_id, action.question, list(action.options))
+            elif action.kind == "done":
+                _notify_done(task_id, action.message[:200] if action.message else None)
+            elif action.kind == "error":
+                _notify_error(task_id, action.message)
+            elif action.kind == "running":
+                _notify_running(task_id)
+
+        def _cleanup_with_lock(task_id: str) -> None:
+            with _sse_bridges_lock:
+                _sse_bridges.pop(task_id, None)
+
         super().__init__(
             task_id=task_id,
             client=client,
             gateway_url=_GATEWAY_URL,
             gateway_api_key=_GATEWAY_API_KEY,
             log_fn=_log,
-            on_prompt=_notify_channel,
-            on_done=_notify_done,
-            on_error=_notify_error,
-            on_running=_notify_running,
-            on_cleanup=lambda tid: _sse_bridges.pop(tid, None),
+            on_action=_dispatch_action,
+            on_cleanup=_cleanup_with_lock,
         )
 
     def _handle_sse_event(self, event: dict) -> None:
