@@ -56,6 +56,12 @@ dependencies = [
 [project.optional-dependencies]
 ui = ["prompt_toolkit"]
 test = ["pytest>=8", "pyyaml"]
+dev = [
+    "pytest>=8",
+    "pyyaml",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
 
 [project.scripts]
 hermit = "hermit_agent.__main__:main"

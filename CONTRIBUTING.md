@@ -18,6 +18,12 @@ python -m venv .venv
 .venv/bin/uv pip install -e '.[test]'
 ```
 
+If you want the optional local tooling mentioned below, install the dev extra instead:
+
+```bash
+.venv/bin/uv pip install -e '.[dev]'
+```
+
 The root GitHub Actions workflow (`.github/workflows/python-tests.yml`) uses the same editable install + `pytest tests/` contract.
 
 ## Running tests
