@@ -10,6 +10,7 @@ def test_peek_waiting_prompt_returns_question_and_preserves_queue():
     prompt = {"question": "Allow?", "options": ["Yes", "No"]}
     state.question_queue.put(prompt)
 
+    assert state.peek_waiting_prompt() == prompt
     result = peek_waiting_prompt(state)
 
     assert result == prompt
@@ -30,6 +31,7 @@ def test_waiting_status_payload_includes_kind_and_prompt():
         "result": state.result,
         "token_totals": state.token_totals,
     }
+    assert state.add_waiting_prompt_fields(dict(result), include_kind=True)["kind"] == "permission_ask"
     result = add_waiting_prompt_fields(result, state, include_kind=True)
 
     assert result == {
@@ -55,6 +57,7 @@ def test_waiting_status_payload_can_skip_kind_for_mcp_shape():
         "status": state.status,
         "token_totals": state.token_totals,
     }
+    assert state.add_waiting_prompt_fields(dict(result), include_kind=False)["question"] == "Continue?"
     result = add_waiting_prompt_fields(result, state, include_kind=False)
 
     assert result == {
@@ -70,11 +73,18 @@ def test_task_actions_reply_and_cancel_preserve_waiting_semantics():
     state = GatewayTaskState(task_id="t4")
     state.status = "waiting"
 
+    assert state.is_waiting_for_reply() is True
     assert is_waiting_for_reply(state) is True
 
+    state.enqueue_reply("local")
+    assert state.reply_queue.get_nowait() == "local"
     enqueue_reply(state, "yes")
     assert state.reply_queue.get_nowait() == "yes"
 
+    state.cancel()
+    assert state.reply_queue.get_nowait() == "__CANCELLED__"
+
+    state.cancel_event.clear()
     cancel_task_state(state)
     assert state.cancel_event.is_set() is True
     assert state.reply_queue.get_nowait() == "__CANCELLED__"
@@ -84,8 +94,13 @@ def test_task_actions_cancel_non_waiting_does_not_enqueue_cancel_message():
     state = GatewayTaskState(task_id="t5")
     state.status = "running"
 
+    assert state.is_waiting_for_reply() is False
     assert is_waiting_for_reply(state) is False
 
+    state.cancel()
+    assert state.reply_queue.empty() is True
+
+    state.cancel_event.clear()
     cancel_task_state(state)
     assert state.cancel_event.is_set() is True
     assert state.reply_queue.empty() is True
