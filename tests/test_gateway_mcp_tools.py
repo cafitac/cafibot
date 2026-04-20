@@ -96,7 +96,7 @@ async def test_check_reply_and_cancel_task_use_real_state():
 
 def test_create_registered_task_state_registers_real_task_and_sse_queue():
     from hermit_agent.gateway._singletons import sse_manager
-    from hermit_agent.gateway.task_runtime import create_registered_task_state
+    from hermit_agent.gateway.task_runtime import create_registered_task_state, prepare_task_launch
     from hermit_agent.gateway.task_store import delete_task, get_task
 
     task_id, state = create_registered_task_state()
@@ -107,3 +107,23 @@ def test_create_registered_task_state_registers_real_task_and_sse_queue():
     finally:
         delete_task(task_id)
         sse_manager._queues.pop(task_id, None)
+
+    launch = prepare_task_launch(
+        task="do work",
+        cwd="",
+        model="",
+        max_turns=3,
+        user="tester",
+        parent_session_id="parent-1",
+    )
+
+    try:
+        assert launch.task_id in sse_manager._queues
+        assert launch.cwd
+        assert launch.model == "__auto__"
+        assert launch.max_turns == 3
+        assert launch.user == "tester"
+        assert launch.state.parent_session_id == "parent-1"
+    finally:
+        delete_task(launch.task_id)
+        sse_manager._queues.pop(launch.task_id, None)

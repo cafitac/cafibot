@@ -6,8 +6,7 @@ from pydantic import BaseModel
 from .._singletons import sse_manager
 from ..task_store import acquire_worker_slot, get_task
 from ..task_actions import cancel_task_state, enqueue_reply, is_waiting_for_reply
-from ..task_models import normalize_requested_model, normalize_task_cwd
-from ..task_runtime import create_registered_task_state
+from ..task_runtime import prepare_task_launch
 from ..task_views import add_waiting_prompt_fields
 from ..auth import AuthContext, get_current_user
 from ..errors import ErrorCode, gateway_error
@@ -113,26 +112,27 @@ async def create_task_endpoint(
     if not acquire_worker_slot():
         raise gateway_error(ErrorCode.SERVER_BUSY)
 
-    cwd = normalize_task_cwd(req.cwd)
-
-    # Auto routing priority when model is omitted: codex -> z.ai -> local ollama
-    model = normalize_requested_model(req.model)
-
-    task_id, state = create_registered_task_state()
-    state.parent_session_id = req.parent_session_id
+    launch = prepare_task_launch(
+        task=req.task,
+        cwd=req.cwd,
+        model=req.model,
+        max_turns=req.max_turns,
+        user=auth.user,
+        parent_session_id=req.parent_session_id,
+    )
 
     background.add_task(
         run_task_async,
-        task_id=task_id,
-        task=req.task,
-        cwd=cwd,
-        user=auth.user,
-        model=model,
-        max_turns=req.max_turns,
-        state=state,
+        task_id=launch.task_id,
+        task=launch.task,
+        cwd=launch.cwd,
+        user=launch.user,
+        model=launch.model,
+        max_turns=launch.max_turns,
+        state=launch.state,
     )
 
-    return {"task_id": task_id, "status": "running"}
+    return {"task_id": launch.task_id, "status": "running"}
 
 
 @router.get("/tasks/{task_id}/stream")

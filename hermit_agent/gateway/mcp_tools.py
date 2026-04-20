@@ -5,8 +5,7 @@ def register_mcp_tools(mcp) -> None:
     """Register 4 tools on the FastMCP instance."""
 
     from .task_actions import cancel_task_state, enqueue_reply, is_waiting_for_reply
-    from .task_models import normalize_requested_model, normalize_task_cwd
-    from .task_runtime import create_registered_task_state
+    from .task_runtime import prepare_task_launch
     from .task_store import acquire_worker_slot, get_task
     from .task_views import add_waiting_prompt_fields
     from .task_runner import run_task_async
@@ -25,22 +24,25 @@ def register_mcp_tools(mcp) -> None:
         if not acquire_worker_slot():
             return mcp_error(ErrorCode.SERVER_BUSY)
 
-        work_cwd = normalize_task_cwd(cwd)
-        use_model = normalize_requested_model(model)
-
-        task_id, state = create_registered_task_state()
+        launch = prepare_task_launch(
+            task=task,
+            cwd=cwd,
+            model=model,
+            max_turns=max_turns,
+            user="mcp",
+        )
 
         asyncio.create_task(run_task_async(
-            task_id=task_id,
-            task=task,
-            cwd=work_cwd,
-            user="mcp",
-            model=use_model,
-            max_turns=max_turns,
-            state=state,
+            task_id=launch.task_id,
+            task=launch.task,
+            cwd=launch.cwd,
+            user=launch.user,
+            model=launch.model,
+            max_turns=launch.max_turns,
+            state=launch.state,
         ))
 
-        return {"status": "running", "task_id": task_id}
+        return {"status": "running", "task_id": launch.task_id}
 
     @mcp.tool()
     async def reply_task(task_id: str, message: str) -> dict:
