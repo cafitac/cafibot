@@ -53,6 +53,90 @@ PENDING_STEPS=()
 say()  { printf "\033[1;36m▸\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m!\033[0m %s\n" "$*" >&2; }
 
+set_default_routing_if_missing() {
+  local settings_file="$1"
+  local codex_command="$2"
+  local zai_model="$3"
+  local local_model="$4"
+  local template="${5:-auto}"
+  python3 - "$settings_file" "$codex_command" "$zai_model" "$local_model" "$template" <<'PYEOF'
+import json, shutil, sys
+
+path, codex_command, zai_model, local_model, template = sys.argv[1:6]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+routing = data.get("routing")
+existing = routing.get("priority_models") if isinstance(routing, dict) else None
+if isinstance(existing, list) and existing:
+    print("UNCHANGED")
+    raise SystemExit(0)
+
+codex_available = bool(codex_command and shutil.which(codex_command))
+zai_available = False
+if zai_model and "providers" in data and isinstance(data["providers"], dict):
+    zblock = data["providers"].get("z.ai")
+    zai_available = isinstance(zblock, dict) and bool(zblock.get("api_key")) and bool(zblock.get("base_url"))
+local_available = bool(local_model and shutil.which("ollama"))
+
+templates = {
+    "auto": [
+        {"model": "gpt-5.4", "reasoning_effort": "medium"},
+        {"model": zai_model} if zai_model else None,
+        {"model": local_model} if local_model else None,
+    ],
+    "codex-first": [
+        {"model": "gpt-5.4", "reasoning_effort": "medium"},
+        {"model": zai_model} if zai_model else None,
+        {"model": local_model} if local_model else None,
+    ],
+    "zai-first": [
+        {"model": zai_model} if zai_model else None,
+        {"model": "gpt-5.4", "reasoning_effort": "medium"},
+        {"model": local_model} if local_model else None,
+    ],
+    "local-only": [
+        {"model": local_model} if local_model else None,
+    ],
+}
+
+desired = [item for item in templates.get(template, templates["auto"]) if item]
+priority_models = []
+for item in desired:
+    model = item["model"]
+    if model == "gpt-5.4" and not codex_available:
+        continue
+    if model == zai_model and not zai_available:
+        continue
+    if model == local_model and not local_available:
+        continue
+    priority_models.append(item)
+
+if not priority_models:
+    fallback = []
+    if codex_available:
+        fallback.append({"model": "gpt-5.4", "reasoning_effort": "medium"})
+    if zai_available and zai_model:
+        fallback.append({"model": zai_model})
+    if local_available and local_model:
+        fallback.append({"model": local_model})
+    priority_models = fallback
+
+if not priority_models:
+    priority_models = [{"model": "gpt-5.4", "reasoning_effort": "medium"}]
+    if zai_model:
+        priority_models.append({"model": zai_model})
+    if local_model:
+        priority_models.append({"model": local_model})
+
+data["routing"] = {"priority_models": priority_models}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print("UPDATED")
+PYEOF
+}
+
 # 0. Settings rename sanity check + legacy-shape migration to providers dict.
 #    Warn when an existing settings.json carries a non-empty flat llm_api_key
 #    (pre-providers-dict shape). Offer an automatic lift into
@@ -161,6 +245,13 @@ else
   "gateway_url": "http://localhost:8765",
   "gateway_api_key": "CHANGE_ME_AFTER_FIRST_RUN",
   "model": "glm-5.1",
+  "routing": {
+    "priority_models": [
+      {"model": "gpt-5.4", "reasoning_effort": "medium"},
+      {"model": "glm-5.1"},
+      {"model": "qwen3-coder:30b"}
+    ]
+  },
   "response_language": "auto",
   "compact_instructions": ""
 }
@@ -262,12 +353,13 @@ fi
 #    misconfigured OLLAMA_MODELS (pointing at unmounted external
 #    storage, etc.) should not abort the rest of the install.
 LOCAL_MODEL_READY=0
+LOCAL_MODEL_NAME="qwen3-coder:30b"
 if [ "$SKIP_OLLAMA" -eq 0 ] && command -v ollama >/dev/null; then
   printf "\033[1;36m▸\033[0m Pull a local coding model via ollama? [y/N] "
   read -r reply || reply="n"
   if [[ "$reply" =~ ^[Yy]$ ]]; then
     say "Pulling qwen3-coder:30b (this can take a while — ~18GB)"
-    if ollama pull qwen3-coder:30b; then
+    if ollama pull "$LOCAL_MODEL_NAME"; then
       LOCAL_MODEL_READY=1
     else
       warn "ollama pull failed. Check OLLAMA_MODELS and the path it points to."
@@ -365,6 +457,34 @@ PYEOF
     esac
   fi
 fi
+
+# 6.75 populate routing.priority_models for fresh/legacy installs that do not
+#      already define a custom route. Existing custom routing is preserved.
+ROUTING_TEMPLATE="auto"
+printf "\033[1;36m▸\033[0m Pick default routing template? [1=Codex-first, 2=z.ai-first, 3=local-only, s=skip] "
+read -r routing_choice || routing_choice="1"
+routing_choice="$(echo "${routing_choice:-1}" | tr '[:upper:]' '[:lower:]')"
+case "$routing_choice" in
+  1|"")
+    ROUTING_TEMPLATE="codex-first"
+    ;;
+  2)
+    ROUTING_TEMPLATE="zai-first"
+    ;;
+  3)
+    ROUTING_TEMPLATE="local-only"
+    ;;
+  s|skip)
+    ROUTING_TEMPLATE="auto"
+    ;;
+  *)
+    warn "Unknown routing choice '$routing_choice' — using auto."
+    ROUTING_TEMPLATE="auto"
+    ;;
+esac
+
+set_default_routing_if_missing "$SETTINGS_FILE" "codex" "glm-5.1" "$LOCAL_MODEL_NAME" "$ROUTING_TEMPLATE" >/dev/null 2>&1 || \
+  warn "Could not initialize routing.priority_models in $SETTINGS_FILE."
 
 # 7. symlink the -hermit slash commands into the user's Claude Code
 #    config so `/feature-develop-hermit` etc. resolve. Symlinks (not
