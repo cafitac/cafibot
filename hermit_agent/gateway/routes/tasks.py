@@ -4,9 +4,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .._singletons import sse_manager
-from ..task_store import (
-    GatewayTaskState, acquire_worker_slot, get_task,
-)
+from ..task_store import acquire_worker_slot, get_task
 from ..task_actions import cancel_task_state, enqueue_reply, is_waiting_for_reply
 from ..task_models import normalize_requested_model, normalize_task_cwd
 from ..task_runtime import create_registered_task_state
