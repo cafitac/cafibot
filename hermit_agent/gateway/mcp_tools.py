@@ -36,14 +36,6 @@ def register_mcp_tools(mcp) -> None:
         state = create_task(task_id)
         sse_manager.register(task_id)
 
-        if task.strip().startswith("/"):
-            slash_line = task.strip().splitlines()[0]
-            try:
-                from ..loop import _preprocess_slash_command
-                task = _preprocess_slash_command(task, slash_line, work_cwd)
-            except Exception as e:
-                logger.warning("slash command preprocessing failed: %s", e)
-
         asyncio.create_task(run_task_async(
             task_id=task_id,
             task=task,
