@@ -1,6 +1,5 @@
 from __future__ import annotations
 import logging
-import os
 import uuid
 
 logger = logging.getLogger("hermit_agent.gateway.mcp_tools")
@@ -10,7 +9,7 @@ def register_mcp_tools(mcp) -> None:
     """Register 4 tools on the FastMCP instance."""
 
     from .task_actions import cancel_task_state, enqueue_reply, is_waiting_for_reply
-    from .task_models import normalize_requested_model
+    from .task_models import normalize_requested_model, normalize_task_cwd
     from .task_store import acquire_worker_slot, create_task, get_task
     from .task_views import add_waiting_prompt_fields
     from ._singletons import sse_manager
@@ -31,7 +30,7 @@ def register_mcp_tools(mcp) -> None:
             return mcp_error(ErrorCode.SERVER_BUSY)
 
         task_id = str(uuid.uuid4())
-        work_cwd = cwd or os.getcwd()
+        work_cwd = normalize_task_cwd(cwd)
         use_model = normalize_requested_model(model)
 
         state = create_task(task_id)
