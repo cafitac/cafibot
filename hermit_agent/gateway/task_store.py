@@ -33,6 +33,40 @@ class GatewayTaskState:
     def is_expired(self) -> bool:
         return (time.monotonic() - self.created_at) > self.TTL_SECONDS
 
+    def is_waiting_for_reply(self) -> bool:
+        return self.status == "waiting"
+
+    def enqueue_reply(self, message: str) -> None:
+        self.reply_queue.put(message)
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+        if self.is_waiting_for_reply():
+            self.reply_queue.put("__CANCELLED__")
+
+    def peek_waiting_prompt(self) -> dict[str, object]:
+        try:
+            q_item = self.question_queue.get_nowait()
+        except Exception:
+            return {}
+
+        try:
+            return {
+                "question": q_item.get("question", ""),
+                "options": q_item.get("options", []),
+            }
+        finally:
+            self.question_queue.put_nowait(q_item)
+
+    def add_waiting_prompt_fields(self, result: dict[str, object], *, include_kind: bool) -> dict[str, object]:
+        if not self.is_waiting_for_reply():
+            return result
+
+        result.update(self.peek_waiting_prompt())
+        if include_kind:
+            result["kind"] = self.waiting_kind or "waiting"
+        return result
+
 
 _tasks: dict[str, GatewayTaskState] = {}
 _tasks_lock = threading.Lock()
