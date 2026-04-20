@@ -35,6 +35,22 @@ def test_discover_available_models_combines_config_and_ollama(monkeypatch):
     ]
 
 
+def test_discover_available_models_tolerates_ollama_lookup_failure(monkeypatch):
+    from hermit_agent.gateway.routes import tasks as tasks_mod
+
+    monkeypatch.setattr("hermit_agent.config.load_settings", lambda: {"x": 1})
+    monkeypatch.setattr("hermit_agent.config.get_primary_model", lambda cfg, available_only=False: "glm-5.1")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("httpx.get", _boom)
+
+    assert tasks_mod._discover_available_models() == [
+        {"id": "glm-5.1", "source": "config", "default": True},
+    ]
+
+
 def test_model_slash_command_uses_discovered_models(monkeypatch):
     from hermit_agent.gateway.routes import tasks as tasks_mod
 
