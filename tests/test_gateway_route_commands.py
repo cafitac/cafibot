@@ -38,3 +38,27 @@ async def test_create_task_endpoint_short_circuits_gateway_slash_commands():
         "status": "done",
         "result": "Gateway mode — /status is not yet supported.",
     }
+
+
+@pytest.mark.anyio
+async def test_create_task_endpoint_schedules_background_work_for_normal_tasks():
+    from hermit_agent.gateway._singletons import sse_manager
+    from hermit_agent.gateway.routes.tasks import TaskRequest, create_task_endpoint
+    from hermit_agent.gateway.task_store import delete_task, get_task
+
+    background = BackgroundTasks()
+    result = await create_task_endpoint(
+        req=TaskRequest(task="do work", cwd="", model="", max_turns=2),
+        background=background,
+        auth=SimpleNamespace(user="tester"),
+    )
+    task_id = result["task_id"]
+
+    try:
+        assert result == {"task_id": task_id, "status": "running"}
+        assert len(background.tasks) == 1
+        assert get_task(task_id) is not None
+        assert task_id in sse_manager._queues
+    finally:
+        delete_task(task_id)
+        sse_manager._queues.pop(task_id, None)
