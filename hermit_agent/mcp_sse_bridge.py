@@ -19,10 +19,7 @@ class _SSEBridge:
         gateway_url: str | None = None,
         gateway_api_key: str | None = None,
         log_fn=None,
-        on_prompt=None,
-        on_done=None,
-        on_error=None,
-        on_running=None,
+        on_action=None,
         on_cleanup=None,
     ):
         self.task_id = task_id
@@ -33,10 +30,7 @@ class _SSEBridge:
         self._gateway_url = gateway_url
         self._gateway_api_key = gateway_api_key
         self._log = log_fn or (lambda _msg: None)
-        self._on_prompt = on_prompt or (lambda *_args, **_kwargs: None)
-        self._on_done = on_done or (lambda *_args, **_kwargs: None)
-        self._on_error = on_error or (lambda *_args, **_kwargs: None)
-        self._on_running = on_running or (lambda *_args, **_kwargs: None)
+        self._on_action = on_action or (lambda *_args, **_kwargs: None)
         self._on_cleanup = on_cleanup or (lambda *_args, **_kwargs: None)
 
     def _bridge_log(self, msg: str) -> None:
@@ -104,11 +98,4 @@ class _SSEBridge:
         action = channel_action_from_sse_event(event)
         if action is None:
             return
-        if action.kind == "prompt":
-            self._on_prompt(self.task_id, action.question, list(action.options))
-        elif action.kind == "done":
-            self._on_done(self.task_id, action.message[:200] if action.message else None)
-        elif action.kind == "error":
-            self._on_error(self.task_id, action.message)
-        elif action.kind == "running":
-            self._on_running(self.task_id)
+        self._on_action(self.task_id, action)
