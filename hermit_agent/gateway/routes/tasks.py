@@ -5,15 +5,15 @@ from pydantic import BaseModel
 
 from .._singletons import sse_manager
 from .. import task_commands as _task_commands
-from ..task_store import acquire_worker_slot, get_task
-from ..task_actions import cancel_task_state, enqueue_reply, is_waiting_for_reply
-from ..task_runtime import prepare_task_launch
-from ..task_views import add_waiting_prompt_fields
+from ..task_store import acquire_worker_slot
+from ..task_actions import is_waiting_for_reply
+from ..task_api import GatewayTaskAPI
 from ..auth import AuthContext, get_current_user
 from ..errors import ErrorCode, gateway_error
 from ..task_runner import run_task_async
 
 router = APIRouter()
+api = GatewayTaskAPI()
 
 
 def _discover_available_models() -> list[dict[str, object]]:
@@ -58,7 +58,7 @@ async def create_task_endpoint(
     if not acquire_worker_slot():
         raise gateway_error(ErrorCode.SERVER_BUSY)
 
-    launch = prepare_task_launch(
+    launch = api.prepare_launch(
         task=req.task,
         cwd=req.cwd,
         model=req.model,
@@ -86,7 +86,7 @@ async def stream_task(
     task_id: str,
     auth: AuthContext = Depends(get_current_user),
 ):
-    state = get_task(task_id)
+    state = api.get_state(task_id)
     if not state:
         raise gateway_error(ErrorCode.TASK_NOT_FOUND)
 
@@ -109,7 +109,7 @@ async def reply_task(
 ):
     from ..sse import SSEEvent
 
-    state = get_task(task_id)
+    state = api.get_state(task_id)
     if not state:
         raise gateway_error(ErrorCode.TASK_NOT_FOUND)
     if not is_waiting_for_reply(state):
@@ -118,7 +118,7 @@ async def reply_task(
             f"Task status is '{state.status}'. Reply is only possible in waiting state.",
         )
 
-    enqueue_reply(state, req.message)
+    api.reply(state, req.message)
     sse_manager.publish_threadsafe(task_id, SSEEvent(type="reply_ack", message="reply received"))
     return {"status": "ok", "task_id": task_id}
 
@@ -128,12 +128,10 @@ async def cancel_task(
     task_id: str,
     auth: AuthContext = Depends(get_current_user),
 ):
-    state = get_task(task_id)
+    state = api.get_state(task_id)
     if not state:
         raise gateway_error(ErrorCode.TASK_NOT_FOUND)
-
-    cancel_task_state(state)
-    return {"status": "cancelled", "task_id": task_id}
+    return api.cancel(state)
 
 
 @router.get("/tasks/{task_id}")
@@ -141,14 +139,9 @@ async def get_task_status(
     task_id: str,
     auth: AuthContext = Depends(get_current_user),
 ):
-    state = get_task(task_id)
+    state = api.get_state(task_id)
     if not state:
         raise gateway_error(ErrorCode.TASK_NOT_FOUND)
-
-    result = {
-        "task_id": task_id,
-        "status": state.status,
-        "result": state.result,
-        "token_totals": state.token_totals,
-    }
-    return add_waiting_prompt_fields(result, state, include_kind=True)
+    payload = api.status_payload(state, include_kind=True)
+    payload.setdefault("result", state.result)
+    return payload

@@ -4,12 +4,12 @@ from __future__ import annotations
 def register_mcp_tools(mcp) -> None:
     """Register 4 tools on the FastMCP instance."""
 
-    from .task_actions import cancel_task_state, enqueue_reply, is_waiting_for_reply
-    from .task_runtime import prepare_task_launch
-    from .task_store import acquire_worker_slot, get_task
-    from .task_views import add_waiting_prompt_fields
+    from .task_actions import is_waiting_for_reply
+    from .task_api import GatewayTaskAPI
+    from .task_store import acquire_worker_slot
     from .task_runner import run_task_async
     import asyncio
+    api = GatewayTaskAPI()
 
     @mcp.tool()
     async def run_task(
@@ -24,7 +24,7 @@ def register_mcp_tools(mcp) -> None:
         if not acquire_worker_slot():
             return mcp_error(ErrorCode.SERVER_BUSY)
 
-        launch = prepare_task_launch(
+        launch = api.prepare_launch(
             task=task,
             cwd=cwd,
             model=model,
@@ -49,7 +49,7 @@ def register_mcp_tools(mcp) -> None:
         """Deliver a user reply to a task in waiting state."""
         from .errors import ErrorCode, mcp_error
 
-        state = get_task(task_id)
+        state = api.get_state(task_id)
         if not state:
             return mcp_error(ErrorCode.TASK_NOT_FOUND, f"task {task_id} not found")
         if not is_waiting_for_reply(state):
@@ -58,35 +58,24 @@ def register_mcp_tools(mcp) -> None:
                 f"task is not waiting (status={state.status})",
             )
 
-        enqueue_reply(state, message)
-        return {"status": "ok", "task_id": task_id}
+        return api.reply(state, message)
 
     @mcp.tool()
     async def check_task(task_id: str) -> dict:
         """Query task status and result."""
         from .errors import ErrorCode, mcp_error
 
-        state = get_task(task_id)
+        state = api.get_state(task_id)
         if not state:
             return mcp_error(ErrorCode.TASK_NOT_FOUND, f"task {task_id} not found")
-
-        result = {
-            "task_id": task_id,
-            "status": state.status,
-            "token_totals": state.token_totals,
-        }
-        if state.status in ("done", "error"):
-            result["result"] = state.result
-        return add_waiting_prompt_fields(result, state, include_kind=False)
+        return api.status_payload(state, include_kind=False)
 
     @mcp.tool()
     async def cancel_task(task_id: str) -> dict:
         """Cancel a running task."""
         from .errors import ErrorCode, mcp_error
 
-        state = get_task(task_id)
+        state = api.get_state(task_id)
         if not state:
             return mcp_error(ErrorCode.TASK_NOT_FOUND, f"task {task_id} not found")
-
-        cancel_task_state(state)
-        return {"status": "cancelled", "task_id": task_id}
+        return api.cancel(state)
