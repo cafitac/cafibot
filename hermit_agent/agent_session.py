@@ -16,6 +16,9 @@ import threading
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable
 
+from .session_support import infer_context_size as _infer_context_size
+from .session_support import run_pytest as _run_pytest
+
 if TYPE_CHECKING:
     from .llm_client import LLMClientBase
     from .loop import AgentLoop
@@ -458,50 +461,3 @@ class CLIAgentSession(AgentSessionBase):
         assert self._agent is not None
         return self._agent.run(prompt)
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _infer_context_size(model: str) -> int:
-    """Estimate context window size from model name."""
-    m = model.lower()
-    if "glm" in m:
-        return 65536
-    if "qwen3" in m:
-        if "64k" in m:
-            return 65536
-        return 32768
-    if "devstral" in m:
-        if "64k" in m:
-            return 65536
-        if "128k" in m:
-            return 131072
-        return 32768
-    return 32000
-
-
-def _run_pytest(cwd: str) -> tuple[bool, str]:
-    """Run .venv/bin/pytest in cwd. Returns (passed, output)."""
-    import os
-    import subprocess
-    from pathlib import Path
-
-    venv_pytest = None
-    for root in [cwd] + [str(p) for p in Path(cwd).parents]:
-        candidate = os.path.join(root, ".venv", "bin", "pytest")
-        if os.path.exists(candidate):
-            venv_pytest = candidate
-            break
-
-    if not venv_pytest:
-        return False, "pytest not found"
-
-    try:
-        result = subprocess.run(
-            [venv_pytest, "-x", "-q", "--tb=short"],
-            cwd=cwd, capture_output=True, text=True, timeout=120,
-        )
-        return result.returncode == 0, result.stdout + result.stderr
-    except Exception as e:
-        return False, str(e)
