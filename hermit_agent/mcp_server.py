@@ -45,6 +45,7 @@ from .mcp_results import (
 )
 from .mcp_schema import DEFAULT_MODEL as _DEFAULT_MODEL
 from .mcp_schema import PROTOCOL_VERSION, SERVER_INFO, TOOLS
+from .mcp_actions import dispatch_channel_action
 from .mcp_channel import (
     _notify_channel,
     _notify_done,
@@ -142,14 +143,14 @@ class _SSEBridge(_BaseSSEBridge):
 
     def __init__(self, task_id: str, client: httpx.Client):
         def _dispatch_action(task_id: str, action) -> None:
-            if action.kind == "prompt":
-                _notify_channel(task_id, action.question, list(action.options))
-            elif action.kind == "done":
-                _notify_done(task_id, action.message[:200] if action.message else None)
-            elif action.kind == "error":
-                _notify_error(task_id, action.message)
-            elif action.kind == "running":
-                _notify_running(task_id)
+            dispatch_channel_action(
+                task_id=task_id,
+                action=action,
+                notify_channel=_notify_channel,
+                notify_done=_notify_done,
+                notify_error=_notify_error,
+                notify_running=_notify_running,
+            )
 
         def _cleanup_with_lock(task_id: str) -> None:
             with _sse_bridges_lock:
@@ -172,14 +173,14 @@ class _SSEBridge(_BaseSSEBridge):
         action = channel_action_from_sse_event(event)
         if action is None:
             return
-        if action.kind == "prompt":
-            _notify_channel(self.task_id, action.question, list(action.options))
-        elif action.kind == "done":
-            _notify_done(self.task_id, action.message[:200] if action.message else None)
-        elif action.kind == "error":
-            _notify_error(self.task_id, action.message)
-        elif action.kind == "running":
-            _notify_running(self.task_id)
+        dispatch_channel_action(
+            task_id=self.task_id,
+            action=action,
+            notify_channel=_notify_channel,
+            notify_done=_notify_done,
+            notify_error=_notify_error,
+            notify_running=_notify_running,
+        )
 
 
 def _start_sse_bridge(task_id: str) -> _SSEBridge:
