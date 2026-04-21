@@ -49,6 +49,7 @@ except Exception:
 
 from .channels_core.event_adapters import bridge_messages_from_sse_event
 from .bridge_commands import build_bridge_commands
+from .bridge_payloads import build_gateway_task_request, build_ready_payload
 from .bridge_runtime import BridgeRuntime
 
 
@@ -83,15 +84,7 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
 
     commands = build_bridge_commands()
 
-    _send({
-        "type": "ready",
-        "model": display_model,
-        "session_id": "gateway",
-        "cwd": args.cwd,
-        "permission": "accept_edits",
-        "version": VERSION,
-        "commands": commands,
-    })
+    _send(build_ready_payload(model=display_model, cwd=args.cwd, version=VERSION, commands=commands))
 
     msg_queue: queue.Queue = queue.Queue()
     runtime = BridgeRuntime(msg_queue)
@@ -210,11 +203,13 @@ def _run_gateway_mode(args: argparse.Namespace) -> None:
             # Create task (including slash commands — handled by gateway)
             try:
                 data = client.create_task_payload(
-                    task=text,
-                    cwd=args.cwd,
-                    model=args.model,
-                    max_turns=args.max_turns,
-                    parent_session_id=session_id,
+                    **build_gateway_task_request(
+                        task=text,
+                        cwd=args.cwd,
+                        model=args.model,
+                        max_turns=args.max_turns,
+                        parent_session_id=session_id,
+                    ),
                 )
             except Exception as e:
                 _send({"type": "error", "message": f"Task creation failed: {e}"})
