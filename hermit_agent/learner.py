@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from .learner_extraction import build_failure_prompt, build_success_prompt, extract_skill_data
+from .learner_verification import evaluate_cleanup_action, resolve_verify_cmd, run_pytest_check, run_verify_command
 from .learner_storage import SkillMeta
 from .learner_storage import add_hub_backlink as _add_hub_backlink
 from .learner_storage import current_day as _now
@@ -245,28 +246,7 @@ class Learner:
 
         Returns: (passed, pytest_output)
         """
-        venv_pytest = os.path.join(cwd, ".venv", "bin", "pytest")
-        if not os.path.exists(venv_pytest):
-            # no .venv found — search from project root
-            for root in [cwd] + [str(p) for p in Path(cwd).parents]:
-                candidate = os.path.join(root, ".venv", "bin", "pytest")
-                if os.path.exists(candidate):
-                    venv_pytest = candidate
-                    break
-
-        try:
-            result = subprocess.run(
-                [venv_pytest, "-x", "-q", "--tb=short"],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            output = result.stdout + result.stderr
-            passed = result.returncode == 0
-        except Exception as e:
-            output = str(e)
-            passed = False
+        passed, output = run_pytest_check(cwd)
 
         if passed:
             self._promote(skill_name)
@@ -378,47 +358,21 @@ class Learner:
                 continue
             meta, body = parsed
 
-            should_deprecate = False
-            should_flag_review = False
-            reason = ""
+            action, reason = evaluate_cleanup_action(
+                meta,
+                min_uses_before_eval=MIN_USES_BEFORE_EVAL,
+                deprecate_threshold=DEPRECATE_THRESHOLD,
+                unused_days_threshold=UNUSED_DAYS_THRESHOLD,
+            )
 
-            # check success rate for sufficiently used skills
-            if meta.use_count >= MIN_USES_BEFORE_EVAL:
-                if meta.success_rate < DEPRECATE_THRESHOLD:
-                    if meta.needs_review:
-                        # still failing despite needs_review flag → deprecate
-                        # stricter threshold: use_count >= 10 AND success_rate < 30%
-                        if meta.use_count >= 10 and meta.success_rate < 0.3:
-                            should_deprecate = True
-                            reason = f"success_rate {meta.success_rate:.0%} < 30% even after review (use={meta.use_count})"
-                    else:
-                        # first failure → set review flag instead of deprecating
-                        should_flag_review = True
-                        reason = f"success_rate {meta.success_rate:.0%} < {DEPRECATE_THRESHOLD:.0%}"
-
-            # check for long-term inactivity (only when success_rate < 0.6)
-            if meta.last_used and meta.use_count > 0:
-                try:
-                    last = datetime.strptime(meta.last_used, "%Y-%m-%d")
-                    days_unused = (datetime.now() - last).days
-                    if days_unused > UNUSED_DAYS_THRESHOLD and meta.success_rate < 0.6:
-                        if meta.needs_review:
-                            should_deprecate = True
-                            reason = f"unused for {days_unused} days + success_rate {meta.success_rate:.0%} (no improvement after review)"
-                        else:
-                            should_flag_review = True
-                            reason = f"unused for {days_unused} days + success_rate {meta.success_rate:.0%}"
-                except Exception:
-                    pass
-
-            if should_deprecate:
+            if action == "deprecate":
                 meta.status = "deprecated"
                 dst = self._skill_path("deprecated", meta.name)
                 _write_skill_file(dst, meta, body + f"\n\n<!-- deprecated: {reason} -->")
                 os.remove(str(p))
                 deprecated.append(meta.name)
                 print(f"\033[33m  [Learner] skill deprecated: {meta.name} ({reason})\033[0m")
-            elif should_flag_review and not meta.needs_review:
+            elif action == "review" and not meta.needs_review:
                 meta.needs_review = True
                 _write_skill_file(str(p), meta, body)
                 print(f"\033[33m  [Learner] skill needs review: {meta.name} ({reason})\033[0m")
@@ -459,35 +413,8 @@ class Learner:
                 if parsed:
                     meta, _ = parsed
 
-            # determine verify_cmd (apply priority order)
-            cmd = ""
-            if meta and meta.verify_cmd:
-                cmd = meta.verify_cmd                                    # 1. directly defined in skill
-            elif name in rules.get("by_name", {}):
-                cmd = rules["by_name"][name]                             # 2. name match
-            elif meta:
-                # 3. trigger keyword match
-                trigger_str = " ".join(meta.triggers).lower()
-                for kw, kw_cmd in rules.get("by_trigger_keyword", {}).items():
-                    if kw.lower() in trigger_str:
-                        cmd = kw_cmd
-                        break
-
-            if not cmd:
-                results[name] = None
-                continue
-
-            try:
-                r = subprocess.run(
-                    cmd,
-                    shell=True,
-                    cwd=cwd,
-                    capture_output=True,
-                    timeout=15,
-                )
-                results[name] = r.returncode == 0
-            except Exception:
-                results[name] = None  # execution error → treat as no signal
+            cmd = resolve_verify_cmd(name, meta, rules)
+            results[name] = run_verify_command(cmd, cwd)
 
         return results
 
