@@ -98,11 +98,18 @@ if [ -f "$PROJECT_SETTINGS" ] || [ -f "$PROJECT_MARKETPLACE" ] || [ -d "$PROJECT
   if confirm "Remove project-local Codex channels setup (.hermit/settings.json block, marketplace entry, local state)?"; then
     PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 - "$PROJECT_DIR" <<'PYEOF'
 import sys
-from hermit_agent.codex_channels_adapter import remove_codex_channels_settings, remove_marketplace_plugin_entry
+from hermit_agent.codex_channels_adapter import (
+    remove_codex_channels_settings,
+    remove_marketplace_plugin_entry,
+    remove_plugin_dir,
+    remove_runtime_dir,
+)
 
 cwd = sys.argv[1]
 remove_codex_channels_settings(cwd)
 remove_marketplace_plugin_entry(cwd)
+remove_plugin_dir(cwd)
+remove_runtime_dir(cwd)
 PYEOF
     if [ -d "$PROJECT_CODEX_STATE" ]; then
       rm -rf "$PROJECT_CODEX_STATE"
