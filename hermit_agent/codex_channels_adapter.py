@@ -9,7 +9,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
@@ -390,20 +390,14 @@ def install_runtime_package(*, settings: CodexChannelsSettings, cwd: str) -> tup
     if ok and Path(_installed_cli_entry(settings)).exists():
         return "package", package_command, None
 
-    if settings.source_path:
-        local_command = build_runtime_local_install_command(settings=settings)
-        ok, local_output = _run_install_command(local_command, cwd)
-        if ok and Path(_installed_cli_entry(settings)).exists():
-            return "local-source", local_command, settings.source_path
-        output = local_output or output
+    if settings.source_path and Path(_source_cli_entry(settings.source_path)).exists():
+        return "local-source", ["use-existing-source", settings.source_path], settings.source_path
 
     downloaded_source = _prepare_downloaded_source(settings)
-    downloaded_command = build_runtime_local_install_command(settings=settings, source_path=downloaded_source)
-    ok, downloaded_output = _run_install_command(downloaded_command, cwd)
-    if ok and Path(_installed_cli_entry(settings)).exists():
-        return "downloaded-source", downloaded_command, downloaded_source
+    if Path(_source_cli_entry(downloaded_source)).exists():
+        return "downloaded-source", ["download-and-build-source", downloaded_source], downloaded_source
 
-    raise RuntimeError(downloaded_output or output or "failed to install codex-channels runtime")
+    raise RuntimeError(output or "failed to install codex-channels runtime")
 
 
 def write_codex_channels_settings(cwd: str, *, settings: CodexChannelsSettings, codex_command: str) -> Path:
@@ -543,6 +537,8 @@ def install_codex_channels(*, cwd: str, codex_command: str = "codex", scope: str
     settings = load_codex_channels_settings({}, cwd)
     ensure_install_prereqs(codex_command)
     install_mode, install_command, source_path = install_runtime_package(settings=settings, cwd=cwd)
+    if source_path and source_path != settings.source_path:
+        settings = replace(settings, source_path=source_path)
     plugin_path = _write_plugin_wrapper(cwd, settings)
     marketplace_path = _write_marketplace_entry(cwd, plugin_path)
     settings_path = write_codex_channels_settings(cwd, settings=settings, codex_command=codex_command)
