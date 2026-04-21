@@ -122,12 +122,22 @@ def test_install_codex_channels_falls_back_to_downloaded_source(monkeypatch, tmp
         plugin_dir=str(tmp_path / "plugins/codex-channels"),
         package_spec="@cafitac/codex-channels@0.1.7",
     )
+    resolved_settings = CodexChannelsSettings(
+        state_file=str(tmp_path / ".codex-channels/state.json"),
+        runtime_dir=str(tmp_path / ".hermit/codex-channels-runtime"),
+        plugin_dir=str(tmp_path / "plugins/codex-channels"),
+        package_spec="@cafitac/codex-channels@0.1.7",
+        source_path=str(source),
+    )
     assert runs[0] == build_runtime_install_command(settings=settings)
     assert runs[1] == ["npm", "install"]
     assert runs[2] == ["npm", "run", "build"]
-    assert runs[3] == build_runtime_local_install_command(settings=settings, source_path=str(source))
-    assert spawned[0] == build_runtime_serve_command(settings=settings)
-    assert runs[4] == build_runtime_status_command(settings=settings)
+    assert spawned[0][0] == "node"
+    assert spawned[0][1] == str(source / "packages" / "cli" / "dist" / "index.js")
+    assert spawned[0][2:] == ["serve", "--host", "127.0.0.1", "--port", "4317", "--state-file", str(tmp_path / ".codex-channels/state.json")]
+    assert runs[3][0] == "node"
+    assert runs[3][1] == str(source / "packages" / "cli" / "dist" / "index.js")
+    assert runs[3][2:] == ["status", "--host", "127.0.0.1", "--port", "4317"]
     assert report.install_mode == "downloaded-source"
     assert report.source_path == str(source)
 
