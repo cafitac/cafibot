@@ -26,11 +26,15 @@ import os
 import sys
 import threading
 import time
-import httpx
 from pathlib import Path
 from typing import Any
 
 from .channels_core.event_adapters import channel_action_from_sse_event
+from .mcp_gateway import (
+    gateway_headers as _gateway_headers_impl,
+    gateway_health_check as _gateway_health_check_impl,
+    init_gateway_client as _init_gateway_client_impl,
+)
 from .mcp_paths import resolve_git_cwd
 from .mcp_results import (
     HEAD_SIZE,
@@ -106,50 +110,30 @@ _HEALTH_CHECK_INTERVAL = 120.0
 
 
 def _init_gateway_client() -> None:
-    """Initialize Gateway client from config/env vars."""
     global _GATEWAY_URL, _GATEWAY_API_KEY, _GATEWAY_CLIENT
-
     from hermit_agent.config import load_settings
-    cfg = load_settings()
-
-    # MCP-specific env vars take priority → config.py settings fallback
-    _GATEWAY_URL = os.environ.get("HERMIT_MCP_GATEWAY_URL") or cfg.get("gateway_url", "http://127.0.0.1:8765")
-    _GATEWAY_API_KEY = os.environ.get("HERMIT_MCP_GATEWAY_API_KEY") or cfg.get("gateway_api_key") or None
-    if not _GATEWAY_API_KEY:
-        _log("[gateway] API key not set — using unauthenticated mode")
-    _GATEWAY_CLIENT = httpx.Client(timeout=httpx.Timeout(300.0, connect=10.0))
+    _GATEWAY_URL, _GATEWAY_API_KEY, _GATEWAY_CLIENT = _init_gateway_client_impl(
+        load_settings=load_settings,
+        log_fn=_log,
+    )
 
 
 def _gateway_headers() -> dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    if _GATEWAY_API_KEY:
-        headers["Authorization"] = f"Bearer {_GATEWAY_API_KEY}"
-    return headers
+    return _gateway_headers_impl(_GATEWAY_API_KEY)
 
 
 def _gateway_health_check(force: bool = False) -> bool:
     global _consecutive_failures, _last_health_check
-
-    now = time.time()
-    if not force and now - _last_health_check < 10.0:
-        return _consecutive_failures < _MAX_CONSECUTIVE_FAILURES
-
-    _last_health_check = now
-    if not _GATEWAY_URL or not _GATEWAY_CLIENT:
-        return False
-
-    try:
-        r = _GATEWAY_CLIENT.get(f"{_GATEWAY_URL}/health", timeout=5.0)
-        is_healthy = r.status_code == 200
-        if is_healthy:
-            _consecutive_failures = 0
-        else:
-            _consecutive_failures += 1
-        return is_healthy
-    except Exception as e:
-        _consecutive_failures += 1
-        _log(f"[gateway] health check failed: {e}")
-        return False
+    healthy, _consecutive_failures, _last_health_check = _gateway_health_check_impl(
+        gateway_url=_GATEWAY_URL,
+        gateway_client=_GATEWAY_CLIENT,
+        consecutive_failures=_consecutive_failures,
+        last_health_check=_last_health_check,
+        max_consecutive_failures=_MAX_CONSECUTIVE_FAILURES,
+        force=force,
+        log_fn=_log,
+    )
+    return healthy
 
 
 class _SSEBridge(_BaseSSEBridge):
