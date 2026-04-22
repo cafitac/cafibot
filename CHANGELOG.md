@@ -7,6 +7,7 @@
 - Added installer/uninstaller hooks for the project-local Codex channels setup, including workspace marketplace cleanup and `.codex-channels` state removal.
 - Added a thin Codex interaction adapter path so Codex approvals and free-text waits can also listen on a `codex-channels` runtime while preserving the existing Hermit reply queue fallback.
 - Switched the happy path toward a package-first local runtime install, with local source-tree fallback kept only for development and unreleased-package scenarios.
+- Pointed Hermit's default Codex runtime target at the fixed published `@cafitac/codex-channels@0.1.9` package.
 
 
 ## v0.3.0

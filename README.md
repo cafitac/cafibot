@@ -116,7 +116,7 @@ Useful flags:
 
 Every prompt is idempotent: re-running the installer detects the existing API key, MCP entry, alias, and ollama model and reports them unchanged instead of duplicating.
 
-### Codex channels happy path (experimental)
+### Codex channels happy path
 
 If you want the Codex path to bootstrap `codex-channels` for local-first interaction routing, run:
 
@@ -130,7 +130,7 @@ That command:
 - generates a local plugin wrapper and marketplace entry for Codex discovery
 - runs a compact local runtime smoke check before reporting success
 
-The preferred path is package-first. If the packaged runtime is not available yet, Hermit can still fall back to a built local `codex-channels` source tree via `HERMIT_CODEX_CHANNELS_SOURCE_PATH` (or a sibling `../codex-channels` checkout).
+This path is package-first and is meant to work without a separate `codex-channels` checkout.
 
 The default path is workspace-local and local-first; remote backends stay optional and out of the critical path.
 
