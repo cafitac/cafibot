@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.3.4
+
+### CI compatibility fixes
+- Restored the truncation constants expected by `tests/test_task_result_handoff.py` through `hermit_agent.mcp_server`.
+- Fixed `interaction_presenter.py` so the permission-summary formatting compiles cleanly on Python 3.11.
+
 ## v0.3.3
 
 ### Release metadata and install docs
