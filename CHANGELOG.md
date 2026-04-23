@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.3.3
+
+### Release metadata and install docs
+- Clarified README install instructions so the published PyPI distribution name is `cafitac-hermit-agent` while the installed CLI commands remain `hermit`, `hermit-agent`, `hermit-gateway`, and `hermit-setup`.
+- Updated package description and search keywords to reflect the current Hermit positioning: Claude Code remains the orchestrator while Hermit provides the Codex-aware MCP executor path.
+
 ## v0.3.2
 
 ### Package metadata alignment
