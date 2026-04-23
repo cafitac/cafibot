@@ -21,7 +21,7 @@ from hermit_agent.codex_channels_adapter import (
     write_codex_channels_settings,
 )
 
-LATEST_SPEC = "@cafitac/codex-channels@0.1.28"
+LATEST_SPEC = "@cafitac/codex-channels@0.1.31"
 
 
 def _make_source_repo(tmp_path: Path) -> Path:

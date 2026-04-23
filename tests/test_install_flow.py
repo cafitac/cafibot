@@ -161,32 +161,32 @@ def test_ensure_gateway_running_starts_daemon_when_probe_is_unhealthy(tmp_path, 
 def test_get_codex_runtime_version_reads_installed_package_json(tmp_path, monkeypatch):
     runtime_pkg = tmp_path / ".hermit" / "codex-channels-runtime" / "node_modules" / "@cafitac" / "codex-channels"
     runtime_pkg.mkdir(parents=True)
-    (runtime_pkg / "package.json").write_text(json.dumps({"version": "0.1.28"}), encoding="utf-8")
+    (runtime_pkg / "package.json").write_text(json.dumps({"version": "0.1.31"}), encoding="utf-8")
 
     class Settings:
         runtime_dir = str(tmp_path / ".hermit" / "codex-channels-runtime")
-        package_spec = "@cafitac/codex-channels@0.1.28"
+        package_spec = "@cafitac/codex-channels@0.1.31"
 
     monkeypatch.setattr("hermit_agent.codex_channels_adapter.load_codex_channels_settings", lambda cfg, cwd: Settings())
     monkeypatch.setattr("hermit_agent.install_flow.load_settings", lambda cwd=None: {})
 
-    assert get_codex_runtime_version(cwd=str(tmp_path)) == "0.1.28"
+    assert get_codex_runtime_version(cwd=str(tmp_path)) == "0.1.31"
 
 
 def test_ensure_codex_channels_ready_reuses_healthy_runtime(tmp_path, monkeypatch):
-    monkeypatch.setattr("hermit_agent.install_flow.get_codex_runtime_version", lambda *, cwd: "0.1.28")
-    monkeypatch.setattr("hermit_agent.install_flow._desired_codex_runtime_version", lambda *, cwd: "0.1.28")
+    monkeypatch.setattr("hermit_agent.install_flow.get_codex_runtime_version", lambda *, cwd: "0.1.31")
+    monkeypatch.setattr("hermit_agent.install_flow._desired_codex_runtime_version", lambda *, cwd: "0.1.31")
 
     status, details, version = ensure_codex_channels_ready(cwd=str(tmp_path), codex_command="codex", scope="workspace")
 
     assert status == "healthy"
-    assert version == "0.1.28"
-    assert details == ["runtime version: 0.1.28"]
+    assert version == "0.1.31"
+    assert details == ["runtime version: 0.1.31"]
 
 
 def test_ensure_codex_channels_ready_installs_when_runtime_missing(tmp_path, monkeypatch):
     monkeypatch.setattr("hermit_agent.install_flow.get_codex_runtime_version", lambda *, cwd: None)
-    monkeypatch.setattr("hermit_agent.install_flow._desired_codex_runtime_version", lambda *, cwd: "0.1.28")
+    monkeypatch.setattr("hermit_agent.install_flow._desired_codex_runtime_version", lambda *, cwd: "0.1.31")
 
     class DummyReport:
         install_mode = "package"
@@ -195,13 +195,13 @@ def test_ensure_codex_channels_ready_installs_when_runtime_missing(tmp_path, mon
         marketplace_path = "/tmp/marketplace.json"
 
     monkeypatch.setattr("hermit_agent.codex_channels_adapter.install_codex_channels", lambda **kwargs: DummyReport())
-    versions = iter([None, "0.1.28"])
+    versions = iter([None, "0.1.31"])
     monkeypatch.setattr("hermit_agent.install_flow.get_codex_runtime_version", lambda *, cwd: next(versions))
 
     status, details, version = ensure_codex_channels_ready(cwd=str(tmp_path), codex_command="codex", scope="workspace")
 
     assert status == "installed"
-    assert version == "0.1.28"
+    assert version == "0.1.31"
     assert any("runtime dir: /tmp/runtime" == item for item in details)
 
 
@@ -297,7 +297,7 @@ def test_run_install_accepts_defaults_and_invokes_optional_steps(tmp_path, monke
 
     monkeypatch.setattr(
         "hermit_agent.install_flow.ensure_codex_channels_ready",
-        lambda **kwargs: ("installed", ["runtime dir: /tmp/runtime"], "0.1.28"),
+        lambda **kwargs: ("installed", ["runtime dir: /tmp/runtime"], "0.1.31"),
     )
     monkeypatch.setattr(
         "hermit_agent.install_flow.ensure_codex_marketplace_registered",
@@ -316,7 +316,7 @@ def test_run_install_accepts_defaults_and_invokes_optional_steps(tmp_path, monke
     assert summary.codex_install_status == "installed"
     assert summary.codex_marketplace_status == "registered"
     assert summary.codex_reply_hook_status == "removed"
-    assert summary.codex_runtime_version == "0.1.28"
+    assert summary.codex_runtime_version == "0.1.31"
     assert any("runtime dir: /tmp/runtime" == item for item in summary.codex_details)
 
 
