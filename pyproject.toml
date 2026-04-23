@@ -4,20 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cafitac-hermit-agent"
-version = "0.3.2"
-description = "Run Claude Code cheaper: a Python MCP sub-agent that delegates grunt work to local ollama or z.ai."
+version = "0.3.3"
+description = "Hermit keeps Claude Code as the orchestrator while a local MCP executor handles Codex-aware coding work."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 keywords = [
-    "llm",
-    "coding-agent",
     "claude-code",
-    "ollama",
-    "mcp",
-    "local-llm",
-    "ai-agent",
+    "coding-agent",
+    "codex",
     "developer-tools",
+    "gateway",
+    "interactive",
+    "llm",
+    "local-llm",
+    "mcp",
+    "ollama",
 ]
 authors = [
     { name = "HermitAgent Contributors" },

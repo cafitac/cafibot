@@ -96,8 +96,12 @@ cd hermit-agent
 Or, once installed from PyPI / editable mode, use the guided installer entrypoint:
 
 ```bash
+pip install cafitac-hermit-agent
 hermit install
 ```
+
+PyPI distribution name: `cafitac-hermit-agent`
+Installed CLI commands remain: `hermit`, `hermit-agent`, `hermit-gateway`, `hermit-setup`
 
 `hermit install` is the product-facing setup path: it asks a few yes/no questions, repairs or creates the local gateway API key, ensures the local gateway is running, offers MCP registration in `~/.claude.json`, and can install or refresh the Codex channels path without making the user edit config files manually.
 
