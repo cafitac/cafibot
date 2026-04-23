@@ -24,7 +24,7 @@ def test_format_doctor_fix_summary_includes_repair_status(monkeypatch):
             gateway_status="healthy",
             mcp_registration_status="registered",
             codex_install_status="installed",
-            codex_runtime_version="0.1.28",
+            codex_runtime_version="0.1.31",
             next_steps=["Run Hermit."],
         ),
     )
@@ -36,4 +36,4 @@ def test_format_doctor_fix_summary_includes_repair_status(monkeypatch):
     assert "mcp=registered" in text
     assert "codex=installed" in text
     assert "codex-facing surface remains: hermit-channel MCP" in text
-    assert "codex integration runtime version: 0.1.28" in text
+    assert "codex integration runtime version: 0.1.31" in text

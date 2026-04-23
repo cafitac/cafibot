@@ -54,7 +54,7 @@ DEFAULTS: dict[str, Any] = {
         "port": 4317,
         "state_file": ".codex-channels/state.json",
         "timeout_ms": 300000,
-        "package_spec": "@cafitac/codex-channels@0.1.28",
+        "package_spec": "@cafitac/codex-channels@0.1.31",
         "npx_command": "npx",
     },
     "model": "qwen3-coder:30b",
