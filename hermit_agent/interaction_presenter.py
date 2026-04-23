@@ -65,11 +65,12 @@ def present_interaction(*, question: str, options: tuple[str, ...] | list[str], 
             if description:
                 body_lines.append(f"설명: {description}")
         options_line = "선택지: " + (" / ".join(normalized_options) if normalized_options else "Yes / No")
+        detail_summary = "\n".join(body_lines[1:]) if len(body_lines) > 1 else body_lines[0]
         return PresentedInteraction(
             title="Hermit 권한 요청",
             body="\n".join(body_lines),
             options_line=options_line,
-            summary=f"Hermit 권한 요청\n{'\n'.join(body_lines[1:]) if len(body_lines) > 1 else body_lines[0]}\n{options_line}",
+            summary=f"Hermit 권한 요청\n{detail_summary}\n{options_line}",
             compact_summary=f"<- [hermit-channel]\n권한 요청: {command or 'bash'}\n{options_line}",
         )
 

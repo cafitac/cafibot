@@ -36,6 +36,9 @@ from .mcp_gateway import (
 )
 from .mcp_paths import resolve_git_cwd
 from .mcp_results import (
+    HEAD_SIZE,
+    RESULT_CAP,
+    TAIL_SIZE,
     result_to_text as _result_to_text,
     truncate_result as _truncate_result,
 )
