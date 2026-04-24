@@ -1,6 +1,8 @@
+import { stringWidth } from './ink/stringWidth.js';
 import { getWrappedLineCount } from './TextInput.js';
 
 export const DEFAULT_TERMINAL_COLUMNS = 80;
+export const MAIN_INPUT_PROMPT = '❯ ';
 
 export type SmartInputMode = 'autocomplete' | 'cursor' | 'history';
 
@@ -13,6 +15,10 @@ export function getTerminalColumns(columns?: number): number {
 
 export function getInputWrapWidth(columns?: number): number {
   return Math.max(10, getTerminalColumns(columns) - 6);
+}
+
+export function getMainInputWrapWidth(columns?: number): number {
+  return Math.max(10, getTerminalColumns(columns) - 2 - stringWidth(MAIN_INPUT_PROMPT));
 }
 
 export function getDialogWidth(columns?: number): number {
@@ -37,7 +43,7 @@ export function getSmartInputMode({
     return 'autocomplete';
   }
 
-  const wrapWidth = getInputWrapWidth(columns);
+  const wrapWidth = getMainInputWrapWidth(columns);
   if (value.includes('\n') || getWrappedLineCount(value, wrapWidth) > 1) {
     return 'cursor';
   }

@@ -91,11 +91,9 @@ function TextInput({ value, placeholder = '', focus = true, onChange, onSubmit, 
     const onSubmitRef = useRef(onSubmit);
     onChangeRef.current = onChange;
     onSubmitRef.current = onSubmit;
-    const previousValue = useRef(value);
-    if (value !== previousValue.current) {
+    if (value !== valueRef.current) {
         valueRef.current = value;
         offsetRef.current = graphemeLength(value);
-        previousValue.current = value;
     }
     const effectiveWrapWidth = wrapWidth ?? Number.POSITIVE_INFINITY;
     const beforeCursor = graphemeSlice(valueRef.current, 0, offsetRef.current);
