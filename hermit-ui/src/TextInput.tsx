@@ -139,11 +139,9 @@ function TextInput({
   onChangeRef.current = onChange;
   onSubmitRef.current = onSubmit;
 
-  const previousValue = useRef(value);
-  if (value !== previousValue.current) {
+  if (value !== valueRef.current) {
     valueRef.current = value;
     offsetRef.current = graphemeLength(value);
-    previousValue.current = value;
   }
 
   const effectiveWrapWidth = wrapWidth ?? Number.POSITIVE_INFINITY;

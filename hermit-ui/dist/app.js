@@ -15,7 +15,7 @@ import useApp from './ink/hooks/use-app.js';
 import { useSelection } from './ink/hooks/use-selection.js';
 import { useCopyOnSelect } from './useCopyOnSelect.js';
 import { applyMarkdown } from './markdown.js';
-import { getDialogWidth, getDisplayVersion, getInputWrapWidth, getSmartInputMode, getTerminalColumns, } from './uiModel.js';
+import { getDialogWidth, getDisplayVersion, getMainInputWrapWidth, getSmartInputMode, getTerminalColumns, } from './uiModel.js';
 import { getInitialStatusHints } from './startupStatus.js';
 import wrapAnsi from 'wrap-ansi';
 import { getHistory, addToHistory } from './history.js';
@@ -258,12 +258,12 @@ function ModalDialog({ title, body, actions, onAction }) {
                         ? _jsx(Text, { color: "ansi:cyan", bold: true, children: `[${a.key}] ${a.label}` })
                         : _jsx(Text, { dim: true, children: `[${a.key}] ${a.label}` }), ' '] }, a.key))), _jsx(Text, { color: "ansi:yellow", children: `  ╰${border}╯` })] }));
 }
-function SmartInput({ value, onChange, onSubmit, onAppendNewline, placeholder, commands }) {
+function SmartInput({ value, onChange, onSubmit, placeholder, commands }) {
     const [historyIdx, setHistoryIdx] = useState(-1);
     const [acIdx, setAcIdx] = useState(0);
     const historyRef = useRef([]);
     const columns = getTerminalColumns();
-    const wrapWidth = getInputWrapWidth(columns);
+    const wrapWidth = getMainInputWrapWidth(columns);
     // 물리 커서는 숨김 (시각적 커서는 TextInput의 chalk.inverse로 표시)
     // 자동완성 후보
     const suggestions = value.startsWith('/')
@@ -272,12 +272,6 @@ function SmartInput({ value, onChange, onSubmit, onAppendNewline, placeholder, c
     const showAc = suggestions.length > 0 && value.length > 0 && !commands[value];
     const inputMode = getSmartInputMode({ value, showAutocomplete: showAc, columns });
     useInput((input, key) => {
-        // Shift+Enter 또는 Alt+Enter → 멀티라인 줄바꿈
-        if ((key.shift && key.return) || (key.meta && key.return)) {
-            if (onAppendNewline)
-                onAppendNewline();
-            return;
-        }
         // ↑ 히스토리
         if (key.upArrow) {
             const hist = historyRef.current;
@@ -832,9 +826,6 @@ function HermitAgentUI() {
         setSessionList(null);
         addLine({ type: 'system', text: 'Session selection cancelled' });
     }, [addLine]);
-    const handleAppendNewline = useCallback(() => {
-        setInput(prev => prev + '\n');
-    }, []);
     useInput((inp, key) => {
         // 트랙패드/휠 스크롤 (wheelUp/wheelDown) + PgUp/PgDn
         if (key.wheelUp) {
@@ -998,22 +989,7 @@ function HermitAgentUI() {
                                             if (v.trim())
                                                 setInput(v.trim());
                                             setHistorySearch('');
-                                        }, wrapWidth: Math.max(10, columns - 20) })] })] })) : (_jsxs(Box, { paddingX: 1, flexDirection: "column", onPaste: (e) => setInput(prev => prev + e.data), children: [input.includes('\n') && (_jsx(Box, { paddingLeft: 2, flexDirection: "column", children: input.split('\n').slice(0, -1).map((ln, i) => (_jsx(Text, { dim: true, children: `  ${ln}` }, i))) })), _jsx(SmartInput, { value: input.includes('\n') ? input.split('\n').pop() : input, onChange: (v) => {
-                                    if (input.includes('\n')) {
-                                        const parts = input.split('\n');
-                                        parts[parts.length - 1] = v;
-                                        setInput(parts.join('\n'));
-                                    }
-                                    else {
-                                        setInput(v);
-                                    }
-                                }, onSubmit: (v) => {
-                                    const full = input.includes('\n')
-                                        ? input.split('\n').slice(0, -1).join('\n') + '\n' + v
-                                        : v;
-                                    handleSubmit(full);
-                                    setInput('');
-                                }, onAppendNewline: handleAppendNewline, placeholder: isRunning && !backgrounded ? 'Agent working... (ESC to interrupt, Ctrl+B to background)' : '', commands: commands }), ctrlCPending
+                                        }, wrapWidth: Math.max(10, columns - 20) })] })] })) : (_jsxs(Box, { paddingX: 1, flexDirection: "column", onPaste: (e) => setInput(prev => prev + e.data), children: [_jsx(SmartInput, { value: input, onChange: setInput, onSubmit: handleSubmit, placeholder: isRunning && !backgrounded ? 'Agent working... (ESC to interrupt, Ctrl+B to background)' : '', commands: commands }), ctrlCPending
                                 ? _jsx(Text, { dim: true, color: "ansi:yellow", children: '  Press Ctrl+C (or Ctrl+D) again to exit' })
                                 : _jsx(Text, { dim: true, children: '  Ctrl+L clear · Ctrl+R search · Ctrl+B bg · Ctrl+O history · ESC interrupt · Ctrl+C/D exit' })] })), _jsx(Box, { children: _jsx(Text, { dim: true, children: '─'.repeat(columns) }) }), _jsx(StatusBar, { status: status, backgrounded: backgrounded, toolCount: toolCountRef.current })] })] }));
 }

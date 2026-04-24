@@ -18,7 +18,7 @@ import { applyMarkdown } from './markdown.js';
 import {
   getDialogWidth,
   getDisplayVersion,
-  getInputWrapWidth,
+  getMainInputWrapWidth,
   getSmartInputMode,
   getTerminalColumns,
 } from './uiModel.js';
@@ -352,17 +352,16 @@ interface SmartInputProps {
   value: string;
   onChange: (v: string) => void;
   onSubmit: (v: string) => void;
-  onAppendNewline?: () => void;
   placeholder?: string;
   commands: Record<string, string>;  // { "/help": "Get help..." }
 }
 
-function SmartInput({ value, onChange, onSubmit, onAppendNewline, placeholder, commands }: SmartInputProps) {
+function SmartInput({ value, onChange, onSubmit, placeholder, commands }: SmartInputProps) {
   const [historyIdx, setHistoryIdx] = useState(-1);
   const [acIdx, setAcIdx] = useState(0);
   const historyRef = useRef<string[]>([]);
   const columns = getTerminalColumns();
-  const wrapWidth = getInputWrapWidth(columns);
+  const wrapWidth = getMainInputWrapWidth(columns);
 
   // 물리 커서는 숨김 (시각적 커서는 TextInput의 chalk.inverse로 표시)
 
@@ -374,12 +373,6 @@ function SmartInput({ value, onChange, onSubmit, onAppendNewline, placeholder, c
   const inputMode = getSmartInputMode({ value, showAutocomplete: showAc, columns });
 
   useInput((input, key) => {
-    // Shift+Enter 또는 Alt+Enter → 멀티라인 줄바꿈
-    if ((key.shift && key.return) || (key.meta && key.return)) {
-      if (onAppendNewline) onAppendNewline();
-      return;
-    }
-
     // ↑ 히스토리
     if (key.upArrow) {
       const hist = historyRef.current;
@@ -1235,10 +1228,6 @@ function HermitAgentUI() {
     addLine({ type: 'system', text: 'Session selection cancelled' });
   }, [addLine]);
 
-  const handleAppendNewline = useCallback(() => {
-    setInput(prev => prev + '\n');
-  }, []);
-
   useInput((inp: string, key: any) => {
     // 트랙패드/휠 스크롤 (wheelUp/wheelDown) + PgUp/PgDn
     if (key.wheelUp) { mainScrollRef.current?.scrollBy(-3); return; }
@@ -1474,33 +1463,10 @@ function HermitAgentUI() {
         </Box>
       ) : (
         <Box paddingX={1} flexDirection="column" onPaste={(e: any) => setInput(prev => prev + e.data)}>
-          {/* 멀티라인 버퍼 표시 */}
-          {input.includes('\n') && (
-            <Box paddingLeft={2} flexDirection="column">
-              {input.split('\n').slice(0, -1).map((ln, i) => (
-                <Text key={i} dim>{`  ${ln}`}</Text>
-              ))}
-            </Box>
-          )}
           <SmartInput
-            value={input.includes('\n') ? input.split('\n').pop()! : input}
-            onChange={(v) => {
-              if (input.includes('\n')) {
-                const parts = input.split('\n');
-                parts[parts.length - 1] = v;
-                setInput(parts.join('\n'));
-              } else {
-                setInput(v);
-              }
-            }}
-            onSubmit={(v) => {
-              const full = input.includes('\n')
-                ? input.split('\n').slice(0, -1).join('\n') + '\n' + v
-                : v;
-              handleSubmit(full);
-              setInput('');
-            }}
-            onAppendNewline={handleAppendNewline}
+            value={input}
+            onChange={setInput}
+            onSubmit={handleSubmit}
             placeholder={isRunning && !backgrounded ? 'Agent working... (ESC to interrupt, Ctrl+B to background)' : ''}
             commands={commands}
           />
