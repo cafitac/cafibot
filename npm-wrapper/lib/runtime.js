@@ -91,12 +91,14 @@ export async function ensureGatewayForUi({
 export function buildInteractiveUiEnv({
   env = process.env,
   layout,
+  wrapperVersion,
 }) {
   return {
     ...env,
     HERMIT_PYTHON: layout.pythonPath,
     HERMIT_VENV_DIR: layout.venvDir,
     HERMIT_DIR: packageRoot,
+    HERMIT_UI_VERSION: wrapperVersion,
   };
 }
 
@@ -245,7 +247,7 @@ export function spawnHermit({
       await ensureGatewayForUi({ env, layout, fsImpl, spawnImpl });
       return spawnImpl("node", [uiEntry], {
         stdio: "inherit",
-        env: buildInteractiveUiEnv({ env, layout }),
+        env: buildInteractiveUiEnv({ env, layout, wrapperVersion }),
       });
     }
 

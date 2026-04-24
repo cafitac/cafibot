@@ -40,7 +40,8 @@
   },
   "files": [
     "npm-wrapper/",
-    "hermit-ui/",
+    "hermit-ui/dist/",
+    "hermit-ui/CAFIBOT_INK_PORT.md",
     "README.md"
   ],
   "publishConfig": {
