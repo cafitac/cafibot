@@ -15,11 +15,12 @@ import useApp from './ink/hooks/use-app.js';
 import { useSelection } from './ink/hooks/use-selection.js';
 import { useCopyOnSelect } from './useCopyOnSelect.js';
 import { applyMarkdown } from './markdown.js';
+import { getDialogWidth, getDisplayVersion, getInputWrapWidth, getSmartInputMode, getTerminalColumns, } from './uiModel.js';
+import { getInitialStatusHints } from './startupStatus.js';
 import wrapAnsi from 'wrap-ansi';
 import { getHistory, addToHistory } from './history.js';
 import TextInput from './TextInput.js';
 import { spawn } from 'child_process';
-import { getWrappedLineCount } from './TextInput.js';
 // Module-level ref to the bridge subprocess. Exposed so the Ctrl+C handler
 // (which runs in a React render context and can't easily reach into effect
 // closures) can terminate the bridge before forcing process exit.
@@ -70,10 +71,10 @@ function MarkdownText({ text }) {
     //
     // 해결: wrapAnsi로 터미널 너비에 맞게 미리 wrap → 각 줄을 독립 Box로 렌더링
     //       → yoga가 실제 출력 줄 수를 정확히 알고 높이를 올바르게 계산.
-    const cols = process.stdout.columns || 80;
+    const columns = getTerminalColumns();
     const lines = React.useMemo(() => {
         const rendered = applyMarkdown(text);
-        const wrapped = wrapAnsi(rendered, Math.max(20, cols - 6), { hard: true, wordWrap: true, trim: false });
+        const wrapped = wrapAnsi(rendered, Math.max(20, columns - 6), { hard: true, wordWrap: true, trim: false });
         // 연속 빈 줄은 최대 1개로 축약 (너무 많은 빈 줄이 화면 공간 낭비)
         const result = [];
         let prevEmpty = false;
@@ -85,7 +86,7 @@ function MarkdownText({ text }) {
             prevEmpty = empty;
         }
         return result;
-    }, [text, cols]);
+    }, [text, columns]);
     return (_jsx(Box, { paddingLeft: 2, flexDirection: "column", children: lines.map((line, i) => line.trim()
             ? _jsx(Box, { children: _jsx(Ansi, { children: line }) }, i)
             : _jsx(Box, { height: 1 }, i)) }));
@@ -251,7 +252,7 @@ function ModalDialog({ title, body, actions, onAction }) {
                 onAction(actions[match].key);
         }
     });
-    const width = Math.min(cols - 4, 60);
+    const width = getDialogWidth();
     const border = '─'.repeat(width - 2);
     return (_jsxs(Box, { flexDirection: "column", paddingX: 1, marginY: 1, children: [_jsx(Text, { color: "ansi:yellow", bold: true, children: `  ╭─ ${title} ${'─'.repeat(Math.max(0, width - title.length - 5))}╮` }), _jsx(Text, { color: "ansi:yellow", children: `  │ ${body.substring(0, width - 4).padEnd(width - 4)} │` }), _jsx(Text, { color: "ansi:yellow", dim: true, children: `  ├${border}┤` }), actions.map((a, i) => (_jsxs(Text, { color: "ansi:yellow", children: ['  │ ', i === idx
                         ? _jsx(Text, { color: "ansi:cyan", bold: true, children: `[${a.key}] ${a.label}` })
@@ -261,14 +262,15 @@ function SmartInput({ value, onChange, onSubmit, onAppendNewline, placeholder, c
     const [historyIdx, setHistoryIdx] = useState(-1);
     const [acIdx, setAcIdx] = useState(0);
     const historyRef = useRef([]);
-    const wrapWidth = Math.max(10, cols - 6);
-    const inputSpansMultipleVisualLines = value.includes('\n') || getWrappedLineCount(value, wrapWidth) > 1;
+    const columns = getTerminalColumns();
+    const wrapWidth = getInputWrapWidth(columns);
     // 물리 커서는 숨김 (시각적 커서는 TextInput의 chalk.inverse로 표시)
     // 자동완성 후보
     const suggestions = value.startsWith('/')
         ? Object.entries(commands).filter(([cmd]) => cmd.startsWith(value)).slice(0, 8)
         : [];
     const showAc = suggestions.length > 0 && value.length > 0 && !commands[value];
+    const inputMode = getSmartInputMode({ value, showAutocomplete: showAc, columns });
     useInput((input, key) => {
         // Shift+Enter 또는 Alt+Enter → 멀티라인 줄바꿈
         if ((key.shift && key.return) || (key.meta && key.return)) {
@@ -279,10 +281,10 @@ function SmartInput({ value, onChange, onSubmit, onAppendNewline, placeholder, c
         // ↑ 히스토리
         if (key.upArrow) {
             const hist = historyRef.current;
-            if (showAc) {
+            if (inputMode === 'autocomplete') {
                 setAcIdx(prev => Math.max(0, prev - 1));
             }
-            else if (!inputSpansMultipleVisualLines) {
+            else if (inputMode === 'history') {
                 if (hist.length === 0)
                     return;
                 const next = Math.min(historyIdx + 1, hist.length - 1);
@@ -293,10 +295,10 @@ function SmartInput({ value, onChange, onSubmit, onAppendNewline, placeholder, c
         }
         // ↓ 히스토리
         if (key.downArrow) {
-            if (showAc) {
+            if (inputMode === 'autocomplete') {
                 setAcIdx(prev => Math.min(suggestions.length - 1, prev + 1));
             }
-            else if (!inputSpansMultipleVisualLines) {
+            else if (inputMode === 'history') {
                 const next = historyIdx - 1;
                 if (next < 0) {
                     setHistoryIdx(-1);
@@ -363,7 +365,6 @@ const PYTHON = (() => {
         return `${process.env.HERMIT_DIR}/.venv/bin/python`;
     return 'python3';
 })();
-const cols = process.stdout.columns || 80;
 const args = process.argv.slice(2);
 const getArg = (name, def) => {
     const idx = args.indexOf(name);
@@ -507,6 +508,7 @@ function StatusBar({ status, backgrounded, toolCount }) {
     const ctxPct = status.ctx_pct || 0;
     const tokens = status.tokens || 0;
     const tokStr = tokens > 1000 ? Math.round(tokens / 1000) + 'k' : String(tokens);
+    const displayVersion = getDisplayVersion(status.version);
     // ctx% 색상: 정상(초록) → 주의(노랑) → 위험(빨강)
     const ctxColor = ctxPct >= 80 ? 'ansi:red' : ctxPct >= 50 ? 'ansi:yellow' : 'ansi:green';
     const ctxStr = `ctx:${ctxPct}%${tokens ? '(' + tokStr + ')' : ''}`;
@@ -521,7 +523,7 @@ function StatusBar({ status, backgrounded, toolCount }) {
         dont_ask: { icon: '⏵⏵ dont ask', color: 'ansi:red' },
     };
     const pc = permConfig[status.permission || 'allow_read'] || { icon: status.permission || '', color: 'ansi:white' };
-    return (_jsxs(Box, { flexDirection: "column", paddingX: 1, children: [_jsxs(Box, { children: [_jsx(Text, { dim: true, children: '  ' }), _jsx(Text, { color: "ansi:cyan", children: `[HermitAgent#${status.version || '?'}]` }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: "ansi:white", children: status.model || '?' }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { dim: true, children: `session:${status.session_min || 0}m` }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: ctxColor, children: ctxStr }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { dim: true, children: `🔧${toolCount || status.turns || 0}` }), status.modified_files ? _jsxs(_Fragment, { children: [_jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: "ansi:yellow", children: `changes:${status.modified_files}` })] }) : null, backgrounded ? _jsxs(_Fragment, { children: [_jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: "ansi:magenta", children: '[BG]' })] }) : null] }), _jsx(Text, { color: pc.color, children: '  ' + pc.icon + ' (shift+tab to cycle)' })] }));
+    return (_jsxs(Box, { flexDirection: "column", paddingX: 1, children: [_jsxs(Box, { children: [_jsx(Text, { dim: true, children: '  ' }), _jsx(Text, { color: "ansi:cyan", children: `[HermitAgent#${displayVersion}]` }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: "ansi:white", children: status.model || '?' }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { dim: true, children: `session:${status.session_min || 0}m` }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: ctxColor, children: ctxStr }), _jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { dim: true, children: `🔧${toolCount || status.turns || 0}` }), status.modified_files ? _jsxs(_Fragment, { children: [_jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: "ansi:yellow", children: `changes:${status.modified_files}` })] }) : null, backgrounded ? _jsxs(_Fragment, { children: [_jsx(Text, { dim: true, children: ' | ' }), _jsx(Text, { color: "ansi:magenta", children: '[BG]' })] }) : null] }), _jsx(Text, { color: pc.color, children: '  ' + pc.icon + ' (shift+tab to cycle)' })] }));
 }
 // ─── 컴포넌트: ScrollBox ─────────────────
 const SCROLL_PAGE = 10;
@@ -576,6 +578,8 @@ function HistoryViewer({ lines, onClose }) {
 function HermitAgentUI() {
     const { exit } = useApp();
     const [input, setInput] = useState('');
+    const columns = getTerminalColumns();
+    const startupStatus = React.useMemo(() => getInitialStatusHints(), []);
     // 드래그 선택 → 자동 clipboard 복사 (Claude Code의 copy-on-select 패턴)
     // mouse tracking이 켜진 상태에서 터미널 native Cmd+C는 selection을 못 찾으므로,
     // mouse-up 시점에 OSC 52 / pbcopy로 직접 clipboard에 쓴다. 그러면 Cmd+C가
@@ -592,7 +596,8 @@ function HermitAgentUI() {
     const [lines, setLines] = useState([]);
     const [status, setStatus] = useState({
         permission: CONFIG.yolo ? 'yolo' : 'allow_read',
-        model: CONFIG.model,
+        model: startupStatus.model || CONFIG.model,
+        version: startupStatus.version,
     });
     const [isRunning, setIsRunning] = useState(false);
     const [streamBuf, setStreamBuf] = useState('');
@@ -985,7 +990,7 @@ function HermitAgentUI() {
     // TODO (P2): 마우스 지원 (22.19) — Ink 6 제한으로 현재 불가
     // TODO (P2): Vim 모드 (22.20) — modal editing, 추후 구현
     // TODO (P2): 이미지 붙여넣기 (22.17) — 로컬 LLM 이미지 지원 확인 후 구현
-    return (_jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [showHistory ? (_jsx(HistoryViewer, { lines: lines, onClose: () => setShowHistory(false) })) : (_jsxs(InkScrollBox, { ref: mainScrollRef, stickyScroll: true, flexGrow: 1, flexDirection: "column", children: [_jsx(Box, { flexGrow: 1 }), lines.length === 0 && (_jsxs(Box, { flexDirection: "column", paddingX: 1, paddingY: 1, children: [_jsx(Text, { bold: true, color: "ansi:cyan", children: '  ╭─ HermitAgent v' + (status.version || '0.1.0') + ' ─╮' }), _jsx(Text, { dim: true, children: '  │ ' + (status.model || CONFIG.model) + ' | ' + CONFIG.cwd + ' │' }), _jsx(Text, { dim: true, children: '  │ /help for commands           │' }), _jsx(Text, { bold: true, color: "ansi:cyan", children: '  ╰─────────────────────────────╯' })] })), lines.map((line, i) => _jsx(OutputLineView, { line: line }, i)), bgNotification && (_jsx(Box, { paddingX: 1, marginTop: 1, children: _jsx(Text, { color: "ansi:green", bold: true, children: `  ✔ ${bgNotification}` }) })), streamBuf && !backgrounded ? (_jsxs(Box, { paddingX: 1, marginTop: 1, flexDirection: "column", children: [_jsx(Text, { color: "ansi:blue", children: '  ⏺ ' }), _jsx(MarkdownText, { text: streamBuf })] })) : null, isRunning && !streamBuf ? (_jsx(Box, { paddingX: 1, children: _jsx(ThinkingIndicator, { backgrounded: backgrounded, lastTool: lastToolRef.current, startTime: taskStartRef.current, toolCount: toolCountRef.current, progressMsg: progressMsg }) })) : null] })), _jsxs(Box, { flexShrink: 0, flexDirection: "column", children: [_jsxs(Box, { marginTop: 1, children: [_jsx(Text, { dim: true, children: '─'.repeat(Math.max(cols - (status.session_id?.length || 0) - 4, 20)) }), _jsx(Text, { dim: true, children: ' ' + (status.session_id || '') + ' ──' })] }), pasteModal ? (_jsx(ModalDialog, { title: "Large paste detected", body: `${pasteModal.text.length} chars. Send? (↑↓ select, Enter confirm)`, actions: [
+    return (_jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [showHistory ? (_jsx(HistoryViewer, { lines: lines, onClose: () => setShowHistory(false) })) : (_jsxs(InkScrollBox, { ref: mainScrollRef, stickyScroll: true, flexGrow: 1, flexDirection: "column", children: [_jsx(Box, { flexGrow: 1 }), lines.length === 0 && (_jsxs(Box, { flexDirection: "column", paddingX: 1, paddingY: 1, children: [_jsx(Text, { bold: true, color: "ansi:cyan", children: '  ╭─ HermitAgent v' + getDisplayVersion(status.version) + ' ─╮' }), _jsx(Text, { dim: true, children: '  │ ' + (status.model || CONFIG.model) + ' | ' + CONFIG.cwd + ' │' }), _jsx(Text, { dim: true, children: '  │ /help for commands           │' }), _jsx(Text, { bold: true, color: "ansi:cyan", children: '  ╰─────────────────────────────╯' })] })), lines.map((line, i) => _jsx(OutputLineView, { line: line }, i)), bgNotification && (_jsx(Box, { paddingX: 1, marginTop: 1, children: _jsx(Text, { color: "ansi:green", bold: true, children: `  ✔ ${bgNotification}` }) })), streamBuf && !backgrounded ? (_jsxs(Box, { paddingX: 1, marginTop: 1, flexDirection: "column", children: [_jsx(Text, { color: "ansi:blue", children: '  ⏺ ' }), _jsx(MarkdownText, { text: streamBuf })] })) : null, isRunning && !streamBuf ? (_jsx(Box, { paddingX: 1, children: _jsx(ThinkingIndicator, { backgrounded: backgrounded, lastTool: lastToolRef.current, startTime: taskStartRef.current, toolCount: toolCountRef.current, progressMsg: progressMsg }) })) : null] })), _jsxs(Box, { flexShrink: 0, flexDirection: "column", children: [_jsxs(Box, { marginTop: 1, children: [_jsx(Text, { dim: true, children: '─'.repeat(Math.max(columns - (status.session_id?.length || 0) - 4, 20)) }), _jsx(Text, { dim: true, children: ' ' + (status.session_id || '') + ' ──' })] }), pasteModal ? (_jsx(ModalDialog, { title: "Large paste detected", body: `${pasteModal.text.length} chars. Send? (↑↓ select, Enter confirm)`, actions: [
                             { key: 'y', label: 'Yes, send' },
                             { key: 'n', label: 'Cancel' },
                         ], onAction: handlePasteAction })) : sessionList ? (_jsx(SessionSelectUI, { sessions: sessionList, onSelect: handleSessionSelect, onCancel: handleSessionCancel })) : permissionAsk ? (_jsx(PermissionDialog, { ask: permissionAsk, onSelect: handlePermissionSelect })) : historySearchMode ? (_jsxs(Box, { flexDirection: "column", paddingX: 1, children: [_jsx(Text, { dim: true, italic: true, children: '  Ctrl+R: history search (ESC to cancel)' }), _jsxs(Box, { children: [_jsx(Text, { color: "ansi:yellow", bold: true, children: 'bck-i-search: ' }), _jsx(TextInput, { value: historySearch, onChange: setHistorySearch, onSubmit: (v) => {
@@ -993,7 +998,7 @@ function HermitAgentUI() {
                                             if (v.trim())
                                                 setInput(v.trim());
                                             setHistorySearch('');
-                                        }, wrapWidth: Math.max(10, cols - 20) })] })] })) : (_jsxs(Box, { paddingX: 1, flexDirection: "column", onPaste: (e) => setInput(prev => prev + e.data), children: [input.includes('\n') && (_jsx(Box, { paddingLeft: 2, flexDirection: "column", children: input.split('\n').slice(0, -1).map((ln, i) => (_jsx(Text, { dim: true, children: `  ${ln}` }, i))) })), _jsx(SmartInput, { value: input.includes('\n') ? input.split('\n').pop() : input, onChange: (v) => {
+                                        }, wrapWidth: Math.max(10, columns - 20) })] })] })) : (_jsxs(Box, { paddingX: 1, flexDirection: "column", onPaste: (e) => setInput(prev => prev + e.data), children: [input.includes('\n') && (_jsx(Box, { paddingLeft: 2, flexDirection: "column", children: input.split('\n').slice(0, -1).map((ln, i) => (_jsx(Text, { dim: true, children: `  ${ln}` }, i))) })), _jsx(SmartInput, { value: input.includes('\n') ? input.split('\n').pop() : input, onChange: (v) => {
                                     if (input.includes('\n')) {
                                         const parts = input.split('\n');
                                         parts[parts.length - 1] = v;
@@ -1010,17 +1015,8 @@ function HermitAgentUI() {
                                     setInput('');
                                 }, onAppendNewline: handleAppendNewline, placeholder: isRunning && !backgrounded ? 'Agent working... (ESC to interrupt, Ctrl+B to background)' : '', commands: commands }), ctrlCPending
                                 ? _jsx(Text, { dim: true, color: "ansi:yellow", children: '  Press Ctrl+C (or Ctrl+D) again to exit' })
-                                : _jsx(Text, { dim: true, children: '  Ctrl+L clear · Ctrl+R search · Ctrl+B bg · Ctrl+O history · ESC interrupt · Ctrl+C/D exit' })] })), _jsx(Box, { children: _jsx(Text, { dim: true, children: '─'.repeat(cols) }) }), _jsx(StatusBar, { status: status, backgrounded: backgrounded, toolCount: toolCountRef.current })] })] }));
+                                : _jsx(Text, { dim: true, children: '  Ctrl+L clear · Ctrl+R search · Ctrl+B bg · Ctrl+O history · ESC interrupt · Ctrl+C/D exit' })] })), _jsx(Box, { children: _jsx(Text, { dim: true, children: '─'.repeat(columns) }) }), _jsx(StatusBar, { status: status, backgrounded: backgrounded, toolCount: toolCountRef.current })] })] }));
 }
-// DEBUG: stdin 원본 데이터 파일 로깅 (IME 진단용)
-import { appendFileSync } from 'fs';
-const STDIN_LOG = '/tmp/hermit-stdin.log';
-appendFileSync(STDIN_LOG, `\n=== NEW SESSION ${new Date().toISOString()} ===\n`);
-process.stdin.on('data', (chunk) => {
-    const hex = [...chunk].map(b => b.toString(16).padStart(2, '0')).join(' ');
-    const text = chunk.toString('utf-8').replace(/[\x00-\x1f\x7f]/g, c => `<${c.charCodeAt(0).toString(16)}>`);
-    appendFileSync(STDIN_LOG, `[${hex}] "${text}"\n`);
-});
 // Korean IME stdin 전처리 — DEL + 커밋 문자가 별도 청크로 올 때 합침.
 // DEL(\x7f)이 단독으로 오면 잠시 대기, 다음 데이터와 합쳐서 처리.
 let imePendingDel = false;

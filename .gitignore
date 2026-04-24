@@ -5,6 +5,11 @@ __pycache__/
 dist/
 build/
 *.egg
+!hermit-ui/dist/
+hermit-ui/dist/*
+!hermit-ui/dist/app.js
+!hermit-ui/dist/uiModel.js
+!hermit-ui/dist/startupStatus.js
 
 # Virtual environment
 venv/
