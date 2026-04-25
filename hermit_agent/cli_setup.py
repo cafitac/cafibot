@@ -12,6 +12,15 @@ import secrets
 import sys
 
 from .config import DEFAULTS, GLOBAL_SETTINGS_PATH
+from .local_runtime import (
+    BACKEND_LLAMA_CPP,
+    BACKEND_MLX,
+    BACKEND_OLLAMA,
+    LocalRuntimeInfo,
+    detect_all_runtimes,
+    detect_local_runtime,
+    get_install_hints,
+)
 
 
 def _prompt(prompt: str, default: str = "") -> str:
@@ -35,7 +44,65 @@ def _generate_api_key() -> str:
     return f"hermit_agent-{secrets.token_hex(16)}"
 
 
-def run_setup() -> None:
+def _display_detected_backends(all_runtimes: list[LocalRuntimeInfo]) -> None:
+    """Print a summary table of detected backends."""
+    print("\nDetected local backends:")
+    for rt in all_runtimes:
+        if rt.available:
+            rec = "  <- recommended" if rt.backend == BACKEND_MLX else ""
+            print(f"  ✅ {rt.backend:12s} (server on :{rt.default_port}){rec}")
+        else:
+            hint = get_install_hints(rt.backend or "") or ""
+            print(f"  ❌ {rt.backend or '???':12s} not available — {hint}")
+    print()
+
+
+def _pick_recommended(all_runtimes: list[LocalRuntimeInfo]) -> LocalRuntimeInfo:
+    """Return the best available backend per PRD priority matrix."""
+    # Priority: MLX > llama.cpp > Ollama
+    priority = [BACKEND_MLX, BACKEND_LLAMA_CPP, BACKEND_OLLAMA]
+    for backend in priority:
+        for rt in all_runtimes:
+            if rt.backend == backend and rt.available:
+                return rt
+    return LocalRuntimeInfo(available=False)
+
+
+def _run_auto_detect(settings: dict, *, yes: bool = False) -> bool:
+    """Run auto-detection and configure settings. Returns True if a backend was set."""
+    all_runtimes = detect_all_runtimes()
+    _display_detected_backends(all_runtimes)
+
+    chosen = _pick_recommended(all_runtimes)
+    if not chosen.available:
+        print("No local LLM backend is running.")
+        print("Start one of:")
+        for backend, hint in [
+            (BACKEND_MLX, "mlx_lm.server --model <model>"),
+            (BACKEND_LLAMA_CPP, "llama-server -m <model.gguf> --port 8081"),
+            (BACKEND_OLLAMA, "ollama serve"),
+        ]:
+            print(f"  {backend}: {hint}")
+        return False
+
+    if not yes:
+        answer = _prompt(f"Use {chosen.backend} ({chosen.base_url}) as default?", "Y")
+        if answer.lower() in ("n", "no"):
+            # Let user pick from available backends
+            available = [rt for rt in all_runtimes if rt.available]
+            if len(available) <= 1:
+                print("No other backends available.")
+                return False
+            opts = [f"{rt.backend} ({rt.base_url})" for rt in available]
+            idx = _choose("Select backend:", opts)
+            chosen = available[idx]
+
+    from .config import apply_detected_backend
+    settings.update(apply_detected_backend(settings, chosen, all_runtimes))
+    return True
+
+
+def run_setup(*, yes: bool = False) -> None:
     print("=" * 50)
     print("  HermitAgent Setup Wizard")
     print("=" * 50)
@@ -45,22 +112,89 @@ def run_setup() -> None:
 
     # 1. LLM Provider selection
     providers = [
-        "ollama (local LLM)",
+        "Auto-detect (recommended)",
+        "MLX (Apple Silicon optimized)",
+        "llama.cpp (lightweight, cross-platform)",
+        "Ollama (universal, easy model management)",
         "z.ai GLM (cloud)",
-        "OpenAI-compatible API",
+        "OpenAI-compatible API (cloud)",
     ]
     choice = _choose("Select LLM Provider:", providers)
 
     if choice == 0:
-        # ollama
-        settings["llm_url"] = "http://localhost:11434/v1"
-        settings["llm_api_key"] = ""
-        settings["model"] = _prompt("Model name", "qwen3-coder:30b")
+        # Auto-detect
+        if _run_auto_detect(settings, yes=yes):
+            # Model prompt for local backends
+            if not settings.get("local_model"):
+                default_model = "qwen3-coder:30b"
+                if settings.get("local_backend") == BACKEND_MLX:
+                    default_model = "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit"
+                settings["local_model"] = _prompt("Model name", default_model)
+            settings["model"] = settings["local_model"]
+        else:
+            # No local backend — fall through to cloud options
+            print("\nFalling back to cloud provider selection.")
+            choice = _choose("Select Cloud Provider:", [
+                "z.ai GLM",
+                "OpenAI-compatible API",
+            ])
+            if choice == 0:
+                settings["llm_url"] = "https://api.z.ai/api/coding/paas/v4"
+                settings["llm_api_key"] = _prompt("z.ai API Key")
+                settings["model"] = _prompt("Model name", "glm-5.1")
+            else:
+                settings["llm_url"] = _prompt("API Base URL", "https://api.openai.com/v1")
+                settings["llm_api_key"] = _prompt("API Key")
+                settings["model"] = _prompt("Model name", "gpt-4o")
+
     elif choice == 1:
+        # MLX explicit
+        all_runtimes = detect_all_runtimes()
+        mlx = next((r for r in all_runtimes if r.backend == BACKEND_MLX), None)
+        if mlx and mlx.available:
+            from .config import apply_detected_backend
+            settings.update(apply_detected_backend(settings, mlx, all_runtimes))
+            settings["local_model"] = _prompt("Model name", "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit")
+            settings["model"] = settings["local_model"]
+        else:
+            print(f"\nMLX not available. Install: {get_install_hints(BACKEND_MLX)}")
+            print("Also ensure mlx_lm.server is running: mlx_lm.server --model <model>")
+            return
+
+    elif choice == 2:
+        # llama.cpp explicit
+        all_runtimes = detect_all_runtimes()
+        lcpp = next((r for r in all_runtimes if r.backend == BACKEND_LLAMA_CPP), None)
+        if lcpp and lcpp.available:
+            from .config import apply_detected_backend
+            settings.update(apply_detected_backend(settings, lcpp, all_runtimes))
+            settings["local_model"] = _prompt("Model name", "")
+            settings["model"] = settings["local_model"]
+        else:
+            print(f"\nllama.cpp not available. Install: {get_install_hints(BACKEND_LLAMA_CPP)}")
+            print("Also ensure llama-server is running: llama-server -m <model.gguf> --port 8081")
+            return
+
+    elif choice == 3:
+        # Ollama explicit
+        all_runtimes = detect_all_runtimes()
+        ollama = next((r for r in all_runtimes if r.backend == BACKEND_OLLAMA), None)
+        if ollama and ollama.available:
+            from .config import apply_detected_backend
+            settings.update(apply_detected_backend(settings, ollama, all_runtimes))
+            settings["local_model"] = _prompt("Model name", "qwen3-coder:30b")
+            settings["model"] = settings["local_model"]
+        else:
+            print(f"\nOllama not available. Install: {get_install_hints(BACKEND_OLLAMA)}")
+            print("Also ensure Ollama is running: ollama serve")
+            return
+
+    elif choice == 4:
         # z.ai GLM
         settings["llm_url"] = "https://api.z.ai/api/coding/paas/v4"
         settings["llm_api_key"] = _prompt("z.ai API Key")
         settings["model"] = _prompt("Model name", "glm-5.1")
+
     else:
         # OpenAI-compatible
         settings["llm_url"] = _prompt("API Base URL", "https://api.openai.com/v1")
@@ -106,6 +240,12 @@ def run_setup() -> None:
         print(f"DB init skipped (auto-created on Gateway start): {e}")
 
     # 6. Completion message
+    backend_info = ""
+    if settings.get("local_backend"):
+        backend_info = f"""
+Local backend:
+  {settings['local_backend']} ({settings.get('local_llm_url', '')})"""
+
     print("\n" + "=" * 50)
     print("  Setup complete!")
     print("=" * 50)
@@ -115,7 +255,7 @@ Start command:
 
 Test:
   curl -H "Authorization: Bearer {settings['gateway_api_key']}" http://localhost:8765/models
-
+{backend_info}
 Settings file:
   {settings_path}
 """)
