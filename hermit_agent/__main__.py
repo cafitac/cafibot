@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -121,6 +122,85 @@ def _build_doctor_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_config_local_backend_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="hermit_agent config local-backend", description="Configure local LLM backend")
+    parser.add_argument("--set", dest="set_backend", choices=["mlx", "llama_cpp", "ollama"], help="Explicitly set backend")
+    parser.add_argument("--list", dest="list_backends", action="store_true", help="List all detected backends")
+    parser.add_argument("--re-detect", dest="re_detect", action="store_true", help="Re-run auto-detection")
+    parser.add_argument("--cwd", default=os.getcwd())
+    return parser
+
+
+def _run_config_local_backend(args: argparse.Namespace) -> None:
+    from .local_runtime import detect_all_runtimes, detect_local_runtime, get_install_hints, BACKEND_MLX, BACKEND_LLAMA_CPP, BACKEND_OLLAMA
+    from .config import load_settings, apply_detected_backend, GLOBAL_SETTINGS_PATH, init_settings_file
+
+    cfg = load_settings(cwd=args.cwd)
+
+    if args.list_backends:
+        all_runtimes = detect_all_runtimes()
+        print("Detected local LLM backends:")
+        for rt in all_runtimes:
+            if rt.available:
+                print(f"  {rt.backend}: {rt.base_url} (port {rt.default_port})")
+            else:
+                hint = get_install_hints(rt.backend or "")
+                hint_suffix = f" — install: {hint}" if hint else ""
+                print(f"  {rt.backend}: not available{hint_suffix}")
+        return
+
+    if args.re_detect or args.set_backend:
+        if args.set_backend:
+            # Force a specific backend by probing all and picking the matching one
+            all_runtimes = detect_all_runtimes()
+            target = next((r for r in all_runtimes if r.backend == args.set_backend), None)
+            if target is None or not target.available:
+                hint = get_install_hints(args.set_backend)
+                print(f"Backend '{args.set_backend}' is not available.")
+                if hint:
+                    print(f"Install hint: {hint}")
+                return
+            chosen = target
+        else:
+            chosen = detect_local_runtime()
+            all_runtimes = detect_all_runtimes()
+
+        if not chosen.available:
+            print("No local LLM backend detected.")
+            print("Install one of:")
+            for backend, hint in [(BACKEND_MLX, get_install_hints(BACKEND_MLX)), (BACKEND_LLAMA_CPP, get_install_hints(BACKEND_LLAMA_CPP)), (BACKEND_OLLAMA, get_install_hints(BACKEND_OLLAMA))]:
+                if hint:
+                    print(f"  {backend}: {hint}")
+            return
+
+        cfg = apply_detected_backend(cfg, chosen, all_runtimes if args.re_detect else [chosen])
+        # Write to global settings
+        settings_path = GLOBAL_SETTINGS_PATH
+        if not settings_path.exists():
+            init_settings_file(global_=True)
+        try:
+            payload = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        payload["local_backend"] = cfg["local_backend"]
+        payload["local_llm_url"] = cfg["local_llm_url"]
+        if cfg.get("local_model"):
+            payload["local_model"] = cfg["local_model"]
+        settings_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"Local backend set to: {chosen.backend} ({chosen.base_url})")
+        return
+
+    # Default: show current config
+    current = cfg.get("local_backend") or "(not configured)"
+    url = cfg.get("local_llm_url") or "(not set)"
+    auto = cfg.get("local_backend_auto_detected", False)
+    print(f"Current local backend: {current}")
+    print(f"  URL: {url}")
+    print(f"  Auto-detected: {'yes' if auto else 'no'}")
+    print("")
+    print("Use --list to see available backends, --re-detect to auto-detect, or --set <backend> to choose.")
+
+
 def parse_args(argv=None):
     """Parse CLI arguments. Pass argv list for testing; omit to read sys.argv."""
     return _build_parser().parse_args(argv)
@@ -147,6 +227,24 @@ def run_single(agent: AgentLoop, message: str):
     except KeyboardInterrupt:
         print("\n[Interrupted]")
         sys.exit(1)
+    finally:
+        _print_token_summary(agent)
+
+
+def _print_token_summary(agent) -> None:
+    t = getattr(agent, "token_totals", {})
+    if not t:
+        return
+    inp = t.get("prompt_tokens", 0)
+    out = t.get("completion_tokens", 0)
+    if not inp and not out:
+        return
+    cached = t.get("cached_tokens", 0)
+    reasoning = t.get("reasoning_tokens", 0)
+    total = inp + out
+    cached_str = f" (+ {cached:,} cached)" if cached else ""
+    reasoning_str = f" (reasoning {reasoning:,})" if reasoning else ""
+    print(f"\nToken usage: total={total:,} input={inp:,}{cached_str} output={out:,}{reasoning_str}", file=sys.stderr)
 
 
 def _resolve_api_key(args) -> str | None:
@@ -372,6 +470,11 @@ def main():
             _run_status_watch(cwd=status_args.cwd, interval=status_args.interval)
         else:
             print(build_operator_status_summary(cwd=status_args.cwd))
+        return
+
+    if len(sys.argv) > 2 and sys.argv[1] == "config" and sys.argv[2] == "local-backend":
+        config_args = _build_config_local_backend_parser().parse_args(sys.argv[3:])
+        _run_config_local_backend(args=config_args)
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":

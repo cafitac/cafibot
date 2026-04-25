@@ -124,6 +124,69 @@ def _check_sensitive_deny() -> DiagCheck:
         return DiagCheck("permissions.sensitive_deny", DiagStatus.FAIL, f"probe failed: {exc}")
 
 
+def _check_local_backend(cwd: str) -> DiagCheck:
+    """Check local LLM backend configuration and health."""
+    from .config import load_settings
+    from .local_runtime import (
+        detect_all_runtimes,
+        detect_local_runtime,
+        get_install_hints,
+        BACKEND_MLX,
+        BACKEND_LLAMA_CPP,
+        BACKEND_OLLAMA,
+    )
+
+    cfg = load_settings(cwd=cwd)
+    configured = cfg.get("local_backend")
+
+    # If a backend is configured, verify it's still healthy
+    if configured:
+        detected = detect_local_runtime()
+        all_runtimes = detect_all_runtimes()
+        configured_runtime = next(
+            (r for r in all_runtimes if r.backend == configured), None
+        )
+
+        if configured_runtime and configured_runtime.available:
+            details = f"{configured} (auto-detected) — server responding on {configured_runtime.base_url}"
+            # Check for alternatives
+            alternatives = [r for r in all_runtimes if r.available and r.backend != configured]
+            if alternatives:
+                alt_str = ", ".join(f"{r.backend} ({r.base_url})" for r in alternatives)
+                details += f" | Alternatives: {alt_str}"
+            # Platform recommendation
+            import sys as _sys
+            import platform as _platform
+            if _sys.platform == "darwin" and _platform.machine() == "arm64":
+                if configured == BACKEND_MLX:
+                    details += " | Optimal for Apple Silicon"
+                elif configured == BACKEND_OLLAMA and any(r.backend == BACKEND_MLX and r.available for r in all_runtimes):
+                    details += " | Tip: MLX is optimal for Apple Silicon"
+            return DiagCheck("local_backend", DiagStatus.PASS, details)
+        else:
+            hint = get_install_hints(configured) or ""
+            return DiagCheck(
+                "local_backend",
+                DiagStatus.WARN,
+                f"configured as '{configured}' but backend not responding | hint: {hint}",
+            )
+
+    # No backend configured — check if one is available
+    detected = detect_local_runtime()
+    if detected.available:
+        return DiagCheck(
+            "local_backend",
+            DiagStatus.WARN,
+            f"{detected.backend} detected ({detected.base_url}) but not configured — run 'hermit_agent config local-backend --re-detect'",
+        )
+
+    return DiagCheck(
+        "local_backend",
+        DiagStatus.WARN,
+        "no local LLM backend detected — install Ollama (https://ollama.com) or run 'hermit_agent config local-backend --list'",
+    )
+
+
 def run_diagnostics(cwd: str | None = None, home: str | None = None) -> DiagReport:
     """Diagnose HermitAgent configuration. Testable by injecting cwd/home."""
     cwd = cwd or os.getcwd()
@@ -134,6 +197,7 @@ def run_diagnostics(cwd: str | None = None, home: str | None = None) -> DiagRepo
         _check_hooks_json(home),
         _check_skills(home),
         _check_sensitive_deny(),
+        _check_local_backend(cwd),
     ]
     return DiagReport(checks=checks)
 

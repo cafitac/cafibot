@@ -344,3 +344,32 @@ def init_settings_file(global_: bool = True, cwd: str | None = None) -> Path:
             encoding="utf-8",
         )
     return path
+
+
+def apply_detected_backend(
+    cfg: dict[str, Any],
+    info: LocalRuntimeInfo,
+    all_detected: list[LocalRuntimeInfo],
+) -> dict[str, Any]:
+    """Merge auto-detected backend info into settings dict.
+
+    Sets: local_backend, local_llm_url, local_model, local_backend_auto_detected, local_backends_available
+    """
+    from .local_runtime import BACKEND_OLLAMA
+
+    out = dict(cfg)
+    out["local_backend"] = info.backend
+    out["local_llm_url"] = info.base_url
+    # For Ollama, keep existing ollama_url synced
+    if info.backend == BACKEND_OLLAMA and info.base_url:
+        out["ollama_url"] = info.base_url
+    # model_hint is optional; don't overwrite an explicit setting
+    if info.model_hint and not cfg.get("local_model"):
+        out["local_model"] = info.model_hint
+    out["local_backend_auto_detected"] = True
+    out["local_backends_available"] = [
+        {"backend": r.backend, "available": r.available, "base_url": r.base_url}
+        for r in all_detected
+        if r.available
+    ]
+    return out
