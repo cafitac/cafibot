@@ -22,14 +22,12 @@ Claude Code or Codex stays the orchestrator — planning, interviewing, code rev
 
 ```bash
 npm install -g @cafitac/hermit-agent
-hermit setup-claude    # Claude Code
-# or
-hermit setup-codex     # Codex
+hermit install    # guided setup (Claude Code + Codex)
 ```
 
 Requires Node.js 20+ and Python 3.11+. The npm package bootstraps a managed Python runtime under `~/.hermit/` on first run — no repo checkout needed.
 
-To upgrade: `hermit self-update`
+To upgrade: `hermit update`
 
 ## Quick start
 
@@ -80,7 +78,7 @@ brew install ollama && ollama pull qwen3-coder:30b
 
 ## Configuration
 
-`~/.hermit/settings.json` (created by `hermit setup-*`):
+`~/.hermit/settings.json` (created by `hermit install`):
 
 ```json
 {
