@@ -24,11 +24,20 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Install dependencies
+        working-directory: hermit-ui
+        run: npm ci
+
+      - name: Build
+        working-directory: hermit-ui
+        run: npm run build
+
       - name: Verify npm package shape
-        run: |
-          npm_config_cache="$(mktemp -d)" npm pack --dry-run
+        working-directory: hermit-ui
+        run: npm_config_cache="$(mktemp -d)" npm pack --dry-run
 
       - name: Publish npm package
+        working-directory: hermit-ui
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
