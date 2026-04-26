@@ -248,8 +248,15 @@ def _resolve_api_key(args) -> str | None:
 def _resolve_model(args) -> str:
     if args.model:
         return args.model
-    from .config import load_settings
-    return load_settings(cwd=os.getcwd()).get("model") or "qwen3-coder:30b"
+    from .config import get_primary_model, load_settings
+
+    cfg = load_settings(cwd=os.getcwd())
+    configured = str(cfg.get("model", "") or "").strip()
+    if configured == "__auto__":
+        return get_primary_model(cfg, available_only=True) or get_primary_model(cfg) or "qwen3-coder:30b"
+    if configured:
+        return configured
+    return get_primary_model(cfg, available_only=True) or get_primary_model(cfg) or "qwen3-coder:30b"
 
 
 def _should_auto_use_cli_channel(args) -> bool:
@@ -299,6 +306,39 @@ def _prompt_new_task_message() -> str:
         return input("Task: ").strip()
     except (EOFError, KeyboardInterrupt):
         return ""
+
+
+def _prompt_guided_install(*, startup_heal) -> bool:
+    if not getattr(startup_heal, "guided_install_recommended", False):
+        return False
+    print("[Hermit] Claude Code or Codex integration is not fully set up yet.")
+    try:
+        answer = input("Run guided setup now and configure both integrations? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in {"", "y", "yes"}
+
+
+def _maybe_run_guided_install(*, args, startup_heal) -> bool:
+    if not _stdio_interactive():
+        return False
+    if not getattr(startup_heal, "guided_install_recommended", False):
+        return False
+    if not _prompt_guided_install(startup_heal=startup_heal):
+        return False
+
+    from .install_flow import format_install_summary, run_install
+
+    summary = run_install(
+        cwd=args.cwd,
+        codex_command="codex",
+        codex_scope="user",
+        assume_yes=False,
+        skip_mcp_register=False,
+        skip_codex=False,
+    )
+    print(format_install_summary(summary))
+    return True
 
 
 def _derive_permission_mode(args) -> PermissionMode:
@@ -487,6 +527,7 @@ def main():
         print(format_startup_heal_summary(startup_heal), file=sys.stderr)
 
     if not args.message and _stdio_interactive():
+        _maybe_run_guided_install(args=args, startup_heal=startup_heal)
         from .pending_interactions import build_idle_operator_overview, run_pending_interaction_loop
 
         handled = run_pending_interaction_loop(cwd=args.cwd)

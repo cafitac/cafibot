@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Install and model-selection UX
+- Switched the primary onboarding flow to `npm install -g @cafitac/hermit-agent` followed by `hermit`, with guided setup offered from startup when Claude Code or Codex integration is incomplete.
+- Added interactive startup update prompts for user-facing `hermit` commands so newer npm releases can be installed before continuing.
+- Added install-time model preference selection so users can choose whether plain `hermit` follows auto-routing or stays pinned to a fixed model.
+- Clarified the difference between `model` and `routing.priority_models`, and made plain `hermit` honor the routing priority chain when `model` is set to `__auto__`.
+
 ## v0.3.10
 
 ### TUI interactive session runtime and codebase hygiene

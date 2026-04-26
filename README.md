@@ -25,10 +25,10 @@ Claude Code or Codex stays the orchestrator — planning, interviewing, code rev
 
 ```bash
 npm install -g @cafitac/hermit-agent
-hermit install    # guided setup (Claude Code + Codex)
+hermit
 ```
 
-Requires Node.js 20+ and Python 3.11+. The npm package bootstraps a managed Python runtime under `~/.hermit/` on first run — no repo checkout needed.
+Requires Node.js 20+ and Python 3.11+. The npm package bootstraps a managed Python runtime under `~/.hermit/` on first run — no repo checkout needed. If Claude Code or Codex integration is still missing, `hermit` will offer guided setup automatically. You can still run `hermit install` directly when you want to force the full setup/repair flow.
 
 To upgrade: `hermit update`
 
@@ -87,18 +87,18 @@ brew install ollama && ollama pull qwen3-coder:30b
 {
   "gateway_url": "http://localhost:8765",
   "gateway_api_key": "hermit-mcp-…",
-  "model": "glm-5.1",
+  "model": "__auto__",
   "routing": {
     "priority_models": [
-      {"model": "gpt-5.4", "reasoning_effort": "medium"},
       {"model": "glm-5.1"},
+      {"model": "gpt-5.4", "reasoning_effort": "medium"},
       {"model": "qwen3-coder:30b"}
     ]
   }
 }
 ```
 
-Providers not configured or installed are skipped automatically. Explicit model names are strict — a missing provider returns a clear error instead of silently falling back.
+`model` controls the default model for plain `hermit`. Set it to `__auto__` if you want plain `hermit` to follow the `routing.priority_models` order. `routing.priority_models` is the ordered fallback chain for auto-routing in gateway / interactive flows, and providers that are not configured or installed are skipped automatically. If `model` is a concrete name like `gpt-5.4`, plain `hermit` stays pinned to that model even if you reorder `priority_models`.
 
 ## Architecture
 

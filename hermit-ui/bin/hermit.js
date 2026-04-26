@@ -2,10 +2,11 @@
 // Thin launcher — lets npm bin resolve to this file while dist/app.js
 // has no shebang (it is compiled output from tsc).
 import { spawn, spawnSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readSync, writeSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+import gt from 'semver/functions/gt.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appJs = join(__dirname, '..', 'dist', 'app.js');
@@ -40,6 +41,66 @@ function readInstalledGlobalVersion() {
     return null;
   }
   return null;
+}
+
+function isInteractivePromptAllowed() {
+  if (process.env.HERMIT_SKIP_STARTUP_UPDATE_CHECK === '1') return false;
+  if (process.env.HERMIT_FORCE_STARTUP_PROMPTS === '1') return true;
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+function shouldPromptForUpdate(commandName) {
+  if (!isInteractivePromptAllowed()) return false;
+  if (!commandName) return true;
+  return !['help', 'version', 'update', 'self-update', 'mcp-server'].includes(commandName);
+}
+
+function promptYesNo(question, defaultYes = true) {
+  if (!isInteractivePromptAllowed()) return false;
+  const suffix = defaultYes ? ' [Y/n] ' : ' [y/N] ';
+  writeSync(process.stdout.fd, `${question}${suffix}`);
+  const buffer = Buffer.alloc(1024);
+  const bytesRead = readSync(process.stdin.fd, buffer, 0, buffer.length, null);
+  const answer = buffer.toString('utf8', 0, Math.max(0, bytesRead)).trim().toLowerCase();
+  if (!answer) return defaultYes;
+  return answer === 'y' || answer === 'yes';
+}
+
+function readLatestPublishedVersion() {
+  const result = spawnSync(
+    'npm',
+    ['view', packageName, 'version', '--json'],
+    {
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+    },
+  );
+
+  if (result.status !== 0) return null;
+  const stdout = String(result.stdout ?? '').trim();
+  if (!stdout) return null;
+
+  try {
+    const payload = JSON.parse(stdout);
+    if (typeof payload === 'string' && payload.trim()) return payload.trim();
+  } catch {
+    if (stdout) return stdout.replace(/^"+|"+$/g, '').trim() || null;
+  }
+  return null;
+}
+
+function maybePromptForSelfUpdate(commandName) {
+  if (!shouldPromptForUpdate(commandName)) return false;
+
+  const currentVersion = readCurrentPackageVersion();
+  const latestVersion = readLatestPublishedVersion();
+  if (!latestVersion || !gt(latestVersion, currentVersion)) return false;
+  if (!promptYesNo(`[hermit] A newer version is available (v${currentVersion} -> v${latestVersion}). Update before continuing?`)) {
+    return false;
+  }
+
+  runSelfUpdate();
+  return true;
 }
 
 function runSelfUpdate() {
@@ -192,6 +253,9 @@ function bootstrapRuntime() {
 if (command === 'update' || command === 'self-update') {
   runSelfUpdate();
 } else if (command && !command.startsWith('-')) {
+  if (maybePromptForSelfUpdate(command)) {
+    process.exit(0);
+  }
   // Non-flag first argument: subcommand or single message → Python backend
   bootstrapRuntime();
   const pythonBin = findPythonBin();
@@ -203,6 +267,9 @@ if (command === 'update' || command === 'self-update') {
   }
 } else {
   // No args (or only flags) → interactive TUI
+  if (maybePromptForSelfUpdate(command)) {
+    process.exit(0);
+  }
   bootstrapRuntime();
   // Set HERMIT_PYTHON so the TUI uses the managed venv, not the system Python.
   const venvPython = findVenvPython();

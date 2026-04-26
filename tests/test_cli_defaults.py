@@ -54,6 +54,19 @@ class TestDefaultModel:
         ns = parse_args([])
         assert _resolve_model(ns) == "qwen3-coder:30b"
 
+    def test_auto_model_uses_first_available_priority_model(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "hermit_agent.config.load_settings",
+            lambda cwd=None: {
+                "model": "__auto__",
+                "routing": {"priority_models": [{"model": "glm-5.1"}, {"model": "gpt-5.4", "reasoning_effort": "medium"}]},
+            },
+        )
+        monkeypatch.setattr("hermit_agent.config.get_primary_model", lambda cfg, available_only=False: "glm-5.1")
+        ns = parse_args([])
+        assert _resolve_model(ns) == "glm-5.1"
+
 
 def test_install_parser_defaults_codex_scope_to_user():
     from hermit_agent.__main__ import _build_install_parser
@@ -282,6 +295,65 @@ def test_main_handles_pending_interaction_before_falling_back_to_idle_message(mo
     monkeypatch.setattr("hermit_agent.install_flow.run_startup_self_heal", lambda **kwargs: StartupHealSummary())
     monkeypatch.setattr("hermit_agent.__main__._stdio_interactive", lambda: True)
     monkeypatch.setattr("hermit_agent.pending_interactions.run_pending_interaction_loop", lambda **kwargs: True)
+    monkeypatch.setattr("hermit_agent.pending_interactions.build_idle_operator_overview", lambda **kwargs: "[Hermit] Ready")
+    monkeypatch.setattr("hermit_agent.__main__._run_idle_menu_loop", lambda **kwargs: None)
+
+    main_mod.main()
+
+
+def test_main_can_run_guided_install_before_idle_shell(monkeypatch, capsys):
+    from hermit_agent import __main__ as main_mod
+    from hermit_agent.install_flow import InstallSummary, StartupHealSummary
+
+    monkeypatch.setattr(main_mod.sys, "argv", ["hermit-agent"])
+    monkeypatch.setattr(
+        "hermit_agent.install_flow.run_startup_self_heal",
+        lambda **kwargs: StartupHealSummary(
+            gateway_status="healthy",
+            mcp_registration_status="missing",
+            codex_runtime_status="missing",
+        ),
+    )
+    monkeypatch.setattr("hermit_agent.__main__._stdio_interactive", lambda: True)
+    monkeypatch.setattr("hermit_agent.__main__._prompt_guided_install", lambda **kwargs: True)
+    monkeypatch.setattr(
+        "hermit_agent.install_flow.run_install",
+        lambda **kwargs: InstallSummary(
+            settings_path="/tmp/settings.json",
+            gateway_api_key_present=True,
+            gateway_status="healthy",
+            mcp_registration_status="registered",
+            codex_install_status="installed",
+        ),
+    )
+    monkeypatch.setattr("hermit_agent.install_flow.format_install_summary", lambda summary: "Hermit install is ready.")
+    monkeypatch.setattr("hermit_agent.pending_interactions.run_pending_interaction_loop", lambda **kwargs: False)
+    monkeypatch.setattr("hermit_agent.pending_interactions.build_idle_operator_overview", lambda **kwargs: "[Hermit] Ready")
+    monkeypatch.setattr("hermit_agent.__main__._run_idle_menu_loop", lambda **kwargs: print("[Hermit] idle-loop"))
+
+    main_mod.main()
+
+    captured = capsys.readouterr()
+    assert "Hermit install is ready." in captured.out
+    assert "[Hermit] Ready" in captured.out
+
+
+def test_main_skips_guided_install_prompt_when_startup_is_healthy(monkeypatch):
+    from hermit_agent import __main__ as main_mod
+    from hermit_agent.install_flow import StartupHealSummary
+
+    monkeypatch.setattr(main_mod.sys, "argv", ["hermit-agent"])
+    monkeypatch.setattr(
+        "hermit_agent.install_flow.run_startup_self_heal",
+        lambda **kwargs: StartupHealSummary(
+            gateway_status="healthy",
+            mcp_registration_status="registered",
+            codex_runtime_status="installed",
+        ),
+    )
+    monkeypatch.setattr("hermit_agent.__main__._stdio_interactive", lambda: True)
+    monkeypatch.setattr("hermit_agent.__main__._prompt_guided_install", lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected prompt")))
+    monkeypatch.setattr("hermit_agent.pending_interactions.run_pending_interaction_loop", lambda **kwargs: False)
     monkeypatch.setattr("hermit_agent.pending_interactions.build_idle_operator_overview", lambda **kwargs: "[Hermit] Ready")
     monkeypatch.setattr("hermit_agent.__main__._run_idle_menu_loop", lambda **kwargs: None)
 

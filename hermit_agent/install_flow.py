@@ -13,7 +13,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from .config import GLOBAL_SETTINGS_PATH, init_settings_file, load_settings
+from .config import DEFAULTS, GLOBAL_SETTINGS_PATH, init_settings_file, load_settings
 
 
 PLACEHOLDER_GATEWAY_KEY = "CHANGE_ME_AFTER_FIRST_RUN"
@@ -32,6 +32,7 @@ class InstallSummary:
     codex_runtime_version: str | None = None
     codex_marketplace_status: str = "skipped"
     codex_reply_hook_status: str = "skipped"
+    model_selection_status: str = "unchanged"
     codex_details: list[str] = field(default_factory=list)
     next_steps: list[str] = field(default_factory=list)
 
@@ -47,6 +48,14 @@ class StartupHealSummary:
     @property
     def changed(self) -> bool:
         return self.settings_initialized or self.gateway_api_key_created or self.gateway_status == "started"
+
+    @property
+    def guided_install_recommended(self) -> bool:
+        return (
+            self.gateway_status in {"missing-script", "start-failed", "unhealthy"}
+            or self.mcp_registration_status == "missing"
+            or self.codex_runtime_status == "missing"
+        )
 
 
 def _stdin_interactive() -> bool:
@@ -66,6 +75,134 @@ def _prompt_yes_no(question: str, *, default: bool = True, assume_yes: bool = Fa
     if not answer:
         return default
     return answer in {"y", "yes"}
+
+
+def _prompt_text(question: str, *, default: str = "", assume_yes: bool = False) -> str:
+    if assume_yes or not _stdin_interactive():
+        return default
+    suffix = f" [{default}]" if default else ""
+    answer = input(f"{question}{suffix} ").strip()
+    return answer or default
+
+
+def _prompt_choice(question: str, options: list[str], *, default: int = 0, assume_yes: bool = False) -> int:
+    if assume_yes or not _stdin_interactive():
+        return default
+    print(question)
+    for idx, option in enumerate(options, 1):
+        marker = " (default)" if idx - 1 == default else ""
+        print(f"  {idx}. {option}{marker}")
+    while True:
+        answer = input("Choice: ").strip()
+        if not answer:
+            return default
+        if answer.isdigit():
+            choice = int(answer) - 1
+            if 0 <= choice < len(options):
+                return choice
+        print(f"Enter a number between 1 and {len(options)}.")
+
+
+def _default_priority_models() -> list[dict[str, str]]:
+    raw = DEFAULTS["routing"]["priority_models"]
+    return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def _priority_model_presets() -> list[tuple[str, list[dict[str, str]]]]:
+    return [
+        (
+            "Codex first: gpt-5.4 -> glm-5.1 -> qwen3-coder:30b",
+            [
+                {"model": "gpt-5.4", "reasoning_effort": "medium"},
+                {"model": "glm-5.1"},
+                {"model": "qwen3-coder:30b"},
+            ],
+        ),
+        (
+            "GLM first: glm-5.1 -> gpt-5.4 -> qwen3-coder:30b",
+            [
+                {"model": "glm-5.1"},
+                {"model": "gpt-5.4", "reasoning_effort": "medium"},
+                {"model": "qwen3-coder:30b"},
+            ],
+        ),
+        (
+            "Local first: qwen3-coder:30b -> glm-5.1 -> gpt-5.4",
+            [
+                {"model": "qwen3-coder:30b"},
+                {"model": "glm-5.1"},
+                {"model": "gpt-5.4", "reasoning_effort": "medium"},
+            ],
+        ),
+    ]
+
+
+def _parse_priority_models_csv(text: str) -> list[dict[str, str]]:
+    parsed: list[dict[str, str]] = []
+    for part in text.split(","):
+        model = part.strip()
+        if not model:
+            continue
+        entry: dict[str, str] = {"model": model}
+        if model == "gpt-5.4":
+            entry["reasoning_effort"] = "medium"
+        parsed.append(entry)
+    return parsed
+
+
+def configure_model_preferences(*, settings_path: Path, assume_yes: bool) -> str:
+    payload = _load_json(settings_path)
+    current_routing = payload.get("routing")
+    if not isinstance(current_routing, dict):
+        current_routing = {}
+
+    print("Model selection")
+    print("  - `model`: plain `hermit` default model")
+    print("  - `routing.priority_models`: auto-routing order for gateway / interactive sessions")
+
+    behavior = _prompt_choice(
+        "How should plain `hermit` choose its model?",
+        [
+            "Auto-select from the priority list (recommended)",
+            "Pin plain `hermit` to one fixed model",
+        ],
+        default=0,
+        assume_yes=assume_yes,
+    )
+    preset_options = [label for label, _items in _priority_model_presets()] + ["Custom comma-separated order"]
+    preset_choice = _prompt_choice(
+        "Choose the priority order Hermit should try when using auto routing:",
+        preset_options,
+        default=0,
+        assume_yes=assume_yes,
+    )
+    if preset_choice < len(_priority_model_presets()):
+        priority_models = [dict(item) for item in _priority_model_presets()[preset_choice][1]]
+    else:
+        custom_default = ", ".join(item["model"] for item in _default_priority_models())
+        custom_text = _prompt_text(
+            "Enter models in order, comma-separated",
+            default=custom_default,
+            assume_yes=assume_yes,
+        )
+        priority_models = _parse_priority_models_csv(custom_text) or _default_priority_models()
+
+    payload["routing"] = {**current_routing, "priority_models": priority_models}
+    if behavior == 0:
+        payload["model"] = "__auto__"
+        status = f"auto ({', '.join(item['model'] for item in priority_models)})"
+    else:
+        fixed_choice = _prompt_choice(
+            "Choose the fixed model for plain `hermit`:",
+            [item["model"] for item in priority_models],
+            default=0,
+            assume_yes=assume_yes,
+        )
+        payload["model"] = priority_models[fixed_choice]["model"]
+        status = f"fixed ({payload['model']})"
+
+    _write_json(settings_path, payload)
+    return status
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -375,6 +512,7 @@ def format_install_summary(summary: InstallSummary) -> str:
         "",
         "Verified:",
         f"- settings file: {summary.settings_path}",
+        f"- model selection: {summary.model_selection_status}",
         f"- gateway API key: {'created' if summary.gateway_api_key_created else ('present' if summary.gateway_api_key_present else 'skipped')}",
         f"- gateway: {summary.gateway_status}",
         f"- MCP registration: {summary.mcp_registration_status}",
@@ -407,6 +545,7 @@ def run_install(
 ) -> InstallSummary:
     settings_path = init_settings_file(global_=True)
     summary = InstallSummary(settings_path=str(settings_path))
+    summary.model_selection_status = configure_model_preferences(settings_path=settings_path, assume_yes=assume_yes)
 
     create_key = _prompt_yes_no(
         "Create or repair the local gateway API key automatically?",
@@ -511,7 +650,9 @@ def format_startup_heal_summary(summary: StartupHealSummary) -> str:
     if summary.gateway_status in {"started", "healthy"}:
         lines.append(f"- gateway {summary.gateway_status}")
     if summary.mcp_registration_status == "missing":
-        lines.append("- Claude MCP registration missing; run `hermit install` to repair it")
+        lines.append("- Claude MCP registration missing; Hermit can guide setup now or via `hermit install`")
     if summary.codex_runtime_status == "missing":
-        lines.append("- Hermit's Codex integration is missing; run `hermit install` to provision it")
+        lines.append("- Hermit's Codex integration is missing; Hermit can guide setup now or via `hermit install`")
+    if summary.guided_install_recommended:
+        lines.append("- Guided setup is recommended before relying on Claude Code or Codex integration")
     return "\n".join(lines)

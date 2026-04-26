@@ -7,6 +7,7 @@ from hermit_agent.install_flow import (
     PLACEHOLDER_GATEWAY_KEY,
     InstallSummary,
     StartupHealSummary,
+    configure_model_preferences,
     ensure_codex_mcp_registered,
     ensure_codex_channels_ready,
     ensure_codex_marketplace_registered,
@@ -27,6 +28,7 @@ from hermit_agent.install_flow import (
 def test_format_install_summary_includes_key_sections():
     summary = InstallSummary(
         settings_path="/tmp/settings.json",
+        model_selection_status="auto (glm-5.1, gpt-5.4)",
         gateway_api_key_created=True,
         gateway_api_key_present=True,
         mcp_registration_status="registered",
@@ -42,6 +44,7 @@ def test_format_install_summary_includes_key_sections():
 
     assert "Hermit install is ready." in text
     assert "- settings file: /tmp/settings.json" in text
+    assert "- model selection: auto (glm-5.1, gpt-5.4)" in text
     assert "- gateway API key: created" in text
     assert "- gateway: unchecked" in text
     assert "- MCP registration: registered" in text
@@ -338,6 +341,27 @@ def test_format_startup_heal_summary_mentions_missing_integrations():
     assert "gateway started" in text
     assert "Claude MCP registration missing" in text
     assert "Codex integration is missing" in text
+    assert "Guided setup is recommended" in text
+
+
+def test_startup_heal_summary_recommends_guided_install_for_missing_integrations():
+    summary = StartupHealSummary(
+        gateway_status="healthy",
+        mcp_registration_status="missing",
+        codex_runtime_status="installed",
+    )
+
+    assert summary.guided_install_recommended is True
+
+
+def test_startup_heal_summary_is_healthy_when_gateway_and_integrations_are_ready():
+    summary = StartupHealSummary(
+        gateway_status="healthy",
+        mcp_registration_status="registered",
+        codex_runtime_status="installed",
+    )
+
+    assert summary.guided_install_recommended is False
 
 
 def test_run_install_accepts_defaults_and_invokes_optional_steps(tmp_path, monkeypatch):
@@ -346,6 +370,10 @@ def test_run_install_accepts_defaults_and_invokes_optional_steps(tmp_path, monke
     monkeypatch.setattr("hermit_agent.config.GLOBAL_SETTINGS_PATH", global_settings)
 
     monkeypatch.setattr("hermit_agent.install_flow._prompt_yes_no", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        "hermit_agent.install_flow.configure_model_preferences",
+        lambda **kwargs: "auto (gpt-5.4, glm-5.1, qwen3-coder:30b)",
+    )
     monkeypatch.setattr(
         "hermit_agent.install_flow.ensure_gateway_api_key",
         lambda *, settings_path: (True, "hermit-mcp-test"),
@@ -382,6 +410,7 @@ def test_run_install_accepts_defaults_and_invokes_optional_steps(tmp_path, monke
     summary = run_install(cwd=str(tmp_path), assume_yes=True)
 
     assert summary.gateway_api_key_created is True
+    assert summary.model_selection_status == "auto (gpt-5.4, glm-5.1, qwen3-coder:30b)"
     assert summary.gateway_status == "healthy"
     assert summary.mcp_registration_status == "registered"
     assert summary.codex_install_status == "installed"
@@ -415,9 +444,40 @@ def test_run_install_surfaces_gateway_failure_in_next_steps(tmp_path, monkeypatc
     global_settings.write_text(json.dumps({"gateway_api_key": ""}), encoding="utf-8")
     monkeypatch.setattr("hermit_agent.config.GLOBAL_SETTINGS_PATH", global_settings)
     monkeypatch.setattr("hermit_agent.install_flow._prompt_yes_no", lambda *args, **kwargs: False)
+    monkeypatch.setattr("hermit_agent.install_flow.configure_model_preferences", lambda **kwargs: "auto (gpt-5.4, glm-5.1, qwen3-coder:30b)")
     monkeypatch.setattr("hermit_agent.install_flow.ensure_gateway_running", lambda *, cwd: "start-failed")
 
     summary = run_install(cwd=str(tmp_path), assume_yes=False, skip_mcp_register=True, skip_codex=True)
 
     assert summary.gateway_status == "start-failed"
     assert any("gateway" in step.lower() for step in summary.next_steps)
+
+
+def test_configure_model_preferences_can_set_auto_mode_and_priority_order(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"model": "gpt-5.4"}), encoding="utf-8")
+    monkeypatch.setattr("hermit_agent.install_flow._stdin_interactive", lambda: True)
+    answers = iter(["", "2"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    status = configure_model_preferences(settings_path=settings_path, assume_yes=False)
+
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert status == "auto (glm-5.1, gpt-5.4, qwen3-coder:30b)"
+    assert saved["model"] == "__auto__"
+    assert saved["routing"]["priority_models"][0]["model"] == "glm-5.1"
+
+
+def test_configure_model_preferences_can_set_fixed_model(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({}), encoding="utf-8")
+    monkeypatch.setattr("hermit_agent.install_flow._stdin_interactive", lambda: True)
+    answers = iter(["2", "", "3"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    status = configure_model_preferences(settings_path=settings_path, assume_yes=False)
+
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert status == "fixed (qwen3-coder:30b)"
+    assert saved["model"] == "qwen3-coder:30b"
+    assert saved["routing"]["priority_models"][0]["model"] == "gpt-5.4"

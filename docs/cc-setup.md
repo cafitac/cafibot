@@ -34,7 +34,14 @@ Copy the printed token into `~/.hermit/settings.json`:
 {
   "gateway_url": "http://localhost:8765",
   "gateway_api_key": "hermit-mcp-…",
-  "model": "glm-5.1"
+  "model": "__auto__",
+  "routing": {
+    "priority_models": [
+      {"model": "glm-5.1"},
+      {"model": "gpt-5.4", "reasoning_effort": "medium"},
+      {"model": "qwen3-coder:30b"}
+    ]
+  }
 }
 ```
 
@@ -108,7 +115,7 @@ Claude will interview you briefly, write a plan, then delegate implementation to
 | `/mcp` shows `hermit` as failed | Check `~/.hermit/gateway.log` for a 401 or connection refused; re-mint the API key |
 | `mcp__hermit__run_task` hangs | Auto-start may have failed or `gateway_url` is wrong; check `~/.hermit/gateway.log`, then try `./bin/gateway.sh --daemon` manually |
 | Claude Code shows no push notifications | Start Claude Code with `--dangerously-load-development-channels server:hermit-channel` |
-| Wrong model picked | `HERMIT_MODEL` env or the `model` / `routing.priority_models` keys in settings. Explicit routing: `gpt-*-codex` and `gpt-5.4` → Codex, `glm-*` → `providers["z.ai"]`, `name:tag` → ollama. If model is omitted, gateway follows `routing.priority_models` and skips providers that are not configured/installed. |
+| Wrong model picked | Check both `HERMIT_MODEL` and the `model` / `routing.priority_models` keys in settings. `model` controls the default model for plain `hermit`; set `model` to `__auto__` if you want plain `hermit` to follow the priority list. `routing.priority_models` controls the auto-routing order for gateway / interactive sessions. Explicit routing: `gpt-*-codex` and `gpt-5.4` → Codex, `glm-*` → `providers["z.ai"]`, `name:tag` → ollama. Auto-routing skips providers that are not configured or installed. |
 | MCP server won't start | `./bin/mcp-server.sh` now ensures the gateway first; if startup still fails, inspect `~/.hermit/mcp_server.log` and `~/.hermit/gateway.log` |
 
 ## How tokens actually get saved
