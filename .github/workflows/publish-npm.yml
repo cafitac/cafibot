@@ -2,21 +2,41 @@ name: Publish npm
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - 'hermit-ui/**'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package + test dependencies
+        run: pip install -e ".[test]"
+      - name: Run pytest suite
+        run: pytest tests/ -q
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -32,6 +52,10 @@ jobs:
         working-directory: hermit-ui
         run: npm run build
 
+      - name: Bump patch version
+        working-directory: hermit-ui
+        run: npm version patch --no-git-tag-version
+
       - name: Verify npm package shape
         working-directory: hermit-ui
         run: npm_config_cache="$(mktemp -d)" npm pack --dry-run
@@ -41,3 +65,12 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add hermit-ui/package.json
+          VERSION=$(node -p "require('./hermit-ui/package.json').version")
+          git commit -m "chore: bump npm to v${VERSION} [skip ci]"
+          git push

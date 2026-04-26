@@ -3,6 +3,10 @@
   "version": "0.3.12",
   "description": "HermitAgent TUI — React+Ink terminal UI for the hermit-agent executor",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cafitac/hermit-agent"
+  },
   "files": [
     "bin",
     "dist"
