@@ -534,6 +534,39 @@ def format_install_summary(summary: InstallSummary) -> str:
     return "\n".join(lines)
 
 
+def configure_zai_credentials(*, settings_path: Path, assume_yes: bool) -> str:
+    """Prompt for z.ai API key and save to providers block. Empty string is valid (skips z.ai)."""
+    payload = _load_json(settings_path)
+    existing = (payload.get("providers") or {}).get("z.ai", {})
+    existing_key = str(existing.get("api_key") or "").strip()
+
+    print("\nz.ai provider setup (GLM models — leave blank to skip):")
+    api_key = _prompt_text(
+        "  z.ai API key",
+        default=existing_key,
+        assume_yes=assume_yes,
+    )
+
+    providers = dict(payload.get("providers") or {})
+    if api_key:
+        base_url = _prompt_text(
+            "  z.ai base URL",
+            default=existing.get("base_url") or "https://api.z.ai/api/coding/paas/v4",
+            assume_yes=assume_yes,
+        )
+        providers["z.ai"] = {"api_key": api_key, "base_url": base_url}
+        payload["providers"] = providers
+        _write_json(settings_path, payload)
+        return "configured"
+    else:
+        # Preserve existing config if already set; otherwise leave providers as-is.
+        if "z.ai" in providers:
+            providers["z.ai"] = {**providers["z.ai"], "api_key": ""}
+            payload["providers"] = providers
+            _write_json(settings_path, payload)
+        return "skipped"
+
+
 def run_install(
     *,
     cwd: str,
@@ -546,6 +579,8 @@ def run_install(
     settings_path = init_settings_file(global_=True)
     summary = InstallSummary(settings_path=str(settings_path))
     summary.model_selection_status = configure_model_preferences(settings_path=settings_path, assume_yes=assume_yes)
+
+    configure_zai_credentials(settings_path=settings_path, assume_yes=assume_yes)
 
     create_key = _prompt_yes_no(
         "Create or repair the local gateway API key automatically?",
