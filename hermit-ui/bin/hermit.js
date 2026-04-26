@@ -31,9 +31,7 @@ Usage:
   hermit <command> [options]
 
 Commands:
-  install                       Guided setup / install flow
-  setup-claude                  Prepare Hermit's Claude Code integration
-  setup-codex                   Prepare Hermit's Codex integration
+  install                       Guided setup / install flow (Claude + Codex)
   doctor                        Diagnose and repair common setup issues
   status                        Show agent / gateway status
   config local-backend          Detect or set local LLM backend (mlx, llama.cpp, ollama)
