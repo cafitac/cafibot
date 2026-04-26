@@ -1,4 +1,4 @@
-name: Publish npm
+name: Publish npm + PyPI
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'hermit-ui/**'
+      - 'hermit_agent/**'
+      - 'pyproject.toml'
   workflow_dispatch:
 
 permissions:
@@ -42,6 +44,11 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Install dependencies
         working-directory: hermit-ui
         run: npm ci
@@ -51,13 +58,16 @@ jobs:
         run: npm run build
 
       - name: Bump to next patch version from registry
-        working-directory: hermit-ui
         run: |
           PUBLISHED=$(npm view @cafitac/hermit-agent version 2>/dev/null || echo "0.0.0")
           IFS='.' read -r MAJOR MINOR PATCH <<< "$PUBLISHED"
           NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
-          npm version "$NEXT" --no-git-tag-version
           echo "Publishing version $NEXT (previous: $PUBLISHED)"
+          echo "NEXT=$NEXT" >> "$GITHUB_ENV"
+          # Bump npm package.json (hermit-ui)
+          npm version "$NEXT" --no-git-tag-version --prefix hermit-ui
+          # Sync pyproject.toml
+          sed -i "s/^version = \".*\"/version = \"$NEXT\"/" pyproject.toml
 
       - name: Verify npm package shape
         working-directory: hermit-ui
@@ -68,3 +78,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
+
+      - name: Build Python distributions
+        run: |
+          pip install --upgrade pip build
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

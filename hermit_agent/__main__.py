@@ -24,6 +24,7 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
+from .version import VERSION
 from .agent_session import CLIAgentSession
 from .llm_client import create_llm_client
 from .permissions import PermissionMode
@@ -45,6 +46,7 @@ def _stdio_interactive() -> bool:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="HermitAgent — Local LLM Coding Agent")
+    parser.add_argument("--version", action="version", version=f"hermit {VERSION}")
     parser.add_argument("message", nargs="?", help="Single message to process")
     parser.add_argument("--model", default=None, help="Model name. Default: HERMIT_MODEL env var, else 'model' in ~/.hermit/settings.json.")
     parser.add_argument(
