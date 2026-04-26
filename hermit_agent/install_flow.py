@@ -444,7 +444,7 @@ def run_install(
                 summary.mcp_registration_status = status
                 summary.mcp_registration_path = str(path)
                 summary.mcp_backup_path = str(backup) if backup else None
-                summary.next_steps.append("Start Claude Code with --dangerously-load-development-channels server:hermit-channel.")
+                summary.next_steps.append("Restart Claude Code to activate the hermit-channel integration.")
             except Exception as exc:
                 summary.mcp_registration_status = f"failed ({exc})"
                 summary.next_steps.append("Repair ~/.claude.json MCP registration before using Claude Code integration.")
@@ -474,6 +474,7 @@ def run_install(
                 )
                 summary.codex_reply_hook_status = remove_codex_reply_hook(cwd=cwd)
                 summary.codex_details.extend(details)
+                summary.next_steps.append("Restart Codex to activate the hermit-channel integration.")
             except Exception as exc:
                 summary.codex_install_status = f"failed ({exc})"
                 summary.codex_marketplace_status = "failed"
