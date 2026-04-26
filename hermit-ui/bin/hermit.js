@@ -6,7 +6,6 @@ import { existsSync, readFileSync, readSync, writeSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
-import gt from 'semver/functions/gt.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appJs = join(__dirname, '..', 'dist', 'app.js');
@@ -89,12 +88,25 @@ function readLatestPublishedVersion() {
   return null;
 }
 
+function compareVersions(left, right) {
+  const leftParts = String(left || '').split('.').map(part => Number.parseInt(part, 10) || 0);
+  const rightParts = String(right || '').split('.').map(part => Number.parseInt(part, 10) || 0);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let idx = 0; idx < length; idx += 1) {
+    const a = leftParts[idx] ?? 0;
+    const b = rightParts[idx] ?? 0;
+    if (a > b) return 1;
+    if (a < b) return -1;
+  }
+  return 0;
+}
+
 function maybePromptForSelfUpdate(commandName) {
   if (!shouldPromptForUpdate(commandName)) return false;
 
   const currentVersion = readCurrentPackageVersion();
   const latestVersion = readLatestPublishedVersion();
-  if (!latestVersion || !gt(latestVersion, currentVersion)) return false;
+  if (!latestVersion || compareVersions(latestVersion, currentVersion) <= 0) return false;
   if (!promptYesNo(`[hermit] A newer version is available (v${currentVersion} -> v${latestVersion}). Update before continuing?`)) {
     return false;
   }
