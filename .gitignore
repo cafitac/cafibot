@@ -109,3 +109,6 @@ hermes-agent/
 
 # Local knowledge scratchpad
 kb/
+
+# Local git worktrees used for isolated agent tasks
+.worktrees/
