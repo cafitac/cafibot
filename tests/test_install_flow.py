@@ -374,7 +374,7 @@ def test_run_install_accepts_defaults_and_invokes_optional_steps(tmp_path, monke
     monkeypatch.setattr("hermit_agent.install_flow._prompt_yes_no", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         "hermit_agent.install_flow.configure_model_preferences",
-        lambda **kwargs: "auto (gpt-5.4, glm-5.1, qwen3-coder:30b)",
+        lambda **kwargs: "auto (glm-5.1, qwen3-coder:30b)",
     )
     monkeypatch.setattr(
         "hermit_agent.install_flow.ensure_gateway_api_key",
@@ -412,7 +412,7 @@ def test_run_install_accepts_defaults_and_invokes_optional_steps(tmp_path, monke
     summary = run_install(cwd=str(tmp_path), assume_yes=True)
 
     assert summary.gateway_api_key_created is True
-    assert summary.model_selection_status == "auto (gpt-5.4, glm-5.1, qwen3-coder:30b)"
+    assert summary.model_selection_status == "auto (glm-5.1, qwen3-coder:30b)"
     assert summary.gateway_status == "healthy"
     assert summary.mcp_registration_status == "registered"
     assert summary.codex_install_status == "installed"
@@ -446,7 +446,7 @@ def test_run_install_surfaces_gateway_failure_in_next_steps(tmp_path, monkeypatc
     global_settings.write_text(json.dumps({"gateway_api_key": ""}), encoding="utf-8")
     monkeypatch.setattr("hermit_agent.config.GLOBAL_SETTINGS_PATH", global_settings)
     monkeypatch.setattr("hermit_agent.install_flow._prompt_yes_no", lambda *args, **kwargs: False)
-    monkeypatch.setattr("hermit_agent.install_flow.configure_model_preferences", lambda **kwargs: "auto (gpt-5.4, glm-5.1, qwen3-coder:30b)")
+    monkeypatch.setattr("hermit_agent.install_flow.configure_model_preferences", lambda **kwargs: "auto (glm-5.1, qwen3-coder:30b)")
     monkeypatch.setattr("hermit_agent.install_flow.ensure_gateway_running", lambda *, cwd: "start-failed")
 
     summary = run_install(cwd=str(tmp_path), assume_yes=False, skip_mcp_register=True, skip_codex=True)
@@ -459,22 +459,25 @@ def test_configure_model_preferences_can_set_auto_mode_and_priority_order(tmp_pa
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(json.dumps({"model": "gpt-5.4"}), encoding="utf-8")
     monkeypatch.setattr("hermit_agent.install_flow._stdin_interactive", lambda: True)
-    answers = iter(["", "2"])
+    answers = iter(["", ""])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     status = configure_model_preferences(settings_path=settings_path, assume_yes=False)
 
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert status == "auto (glm-5.1, gpt-5.4, qwen3-coder:30b)"
+    assert status == "auto (glm-5.1, qwen3-coder:30b)"
     assert saved["model"] == "__auto__"
-    assert saved["routing"]["priority_models"][0]["model"] == "glm-5.1"
+    assert saved["routing"]["priority_models"] == [
+        {"model": "glm-5.1"},
+        {"model": "qwen3-coder:30b"},
+    ]
 
 
 def test_configure_model_preferences_can_set_fixed_model(tmp_path, monkeypatch):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(json.dumps({}), encoding="utf-8")
     monkeypatch.setattr("hermit_agent.install_flow._stdin_interactive", lambda: True)
-    answers = iter(["2", "", "3"])
+    answers = iter(["2", "", "2"])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     status = configure_model_preferences(settings_path=settings_path, assume_yes=False)
@@ -482,4 +485,17 @@ def test_configure_model_preferences_can_set_fixed_model(tmp_path, monkeypatch):
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
     assert status == "fixed (qwen3-coder:30b)"
     assert saved["model"] == "qwen3-coder:30b"
-    assert saved["routing"]["priority_models"][0]["model"] == "gpt-5.4"
+    assert saved["routing"]["priority_models"] == [
+        {"model": "glm-5.1"},
+        {"model": "qwen3-coder:30b"},
+    ]
+
+
+def test_default_routing_omits_codex_but_keeps_codex_executor_defaults():
+    from hermit_agent.config import DEFAULTS
+
+    assert DEFAULTS["codex_default_model"] == "gpt-5.4"
+    assert DEFAULTS["routing"]["priority_models"] == [
+        {"model": "glm-5.1"},
+        {"model": "qwen3-coder:30b"},
+    ]

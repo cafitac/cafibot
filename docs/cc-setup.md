@@ -38,7 +38,6 @@ Copy the printed token into `~/.hermit/settings.json`:
   "routing": {
     "priority_models": [
       {"model": "glm-5.1"},
-      {"model": "gpt-5.4", "reasoning_effort": "medium"},
       {"model": "qwen3-coder:30b"}
     ]
   }

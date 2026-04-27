@@ -114,27 +114,33 @@ def _default_priority_models() -> list[dict[str, str]]:
 def _priority_model_presets() -> list[tuple[str, list[dict[str, str]]]]:
     return [
         (
-            "Codex first: gpt-5.4 -> glm-5.1 -> qwen3-coder:30b",
+            "Recommended executor routing: glm-5.1 -> qwen3-coder:30b",
             [
-                {"model": "gpt-5.4", "reasoning_effort": "medium"},
                 {"model": "glm-5.1"},
                 {"model": "qwen3-coder:30b"},
             ],
         ),
         (
-            "GLM first: glm-5.1 -> gpt-5.4 -> qwen3-coder:30b",
+            "Local first: qwen3-coder:30b -> glm-5.1",
             [
-                {"model": "glm-5.1"},
-                {"model": "gpt-5.4", "reasoning_effort": "medium"},
                 {"model": "qwen3-coder:30b"},
+                {"model": "glm-5.1"},
             ],
         ),
         (
-            "Local first: qwen3-coder:30b -> glm-5.1 -> gpt-5.4",
+            "Include Codex fallback: glm-5.1 -> qwen3-coder:30b -> gpt-5.4",
             [
-                {"model": "qwen3-coder:30b"},
                 {"model": "glm-5.1"},
+                {"model": "qwen3-coder:30b"},
                 {"model": "gpt-5.4", "reasoning_effort": "medium"},
+            ],
+        ),
+        (
+            "Codex first (explicit opt-in): gpt-5.4 -> glm-5.1 -> qwen3-coder:30b",
+            [
+                {"model": "gpt-5.4", "reasoning_effort": "medium"},
+                {"model": "glm-5.1"},
+                {"model": "qwen3-coder:30b"},
             ],
         ),
     ]
