@@ -268,3 +268,81 @@ def test_hermit_subcommand_syncs_managed_runtime_before_running_backend(tmp_path
     assert "[hermit] Syncing managed runtime to" in result.stdout
     assert "backend:status" in result.stdout
     assert "install --quiet --upgrade cafitac-hermit-agent==" in sync_log.read_text(encoding="utf-8")
+
+
+def test_hermit_mcp_server_keeps_stdout_clean_during_managed_runtime_sync(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    hermit_script = repo_root / "hermit-ui" / "bin" / "hermit.js"
+
+    fake_home = tmp_path / "home"
+    venv_bin = fake_home / ".hermit" / "npm-runtime" / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+
+    fake_python = venv_bin / "python"
+    fake_python.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                'if [ \"$1\" = \"-c\" ]; then',
+                "  printf '%s\\n' '0.3.19'",
+                "  exit 0",
+                "fi",
+                "exit 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
+    fake_python3 = venv_bin / "python3"
+    fake_python3.write_text(fake_python.read_text(encoding="utf-8"), encoding="utf-8")
+    fake_python3.chmod(fake_python3.stat().st_mode | stat.S_IXUSR)
+
+    fake_pip = venv_bin / "pip"
+    fake_pip.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "echo \"pip-stdout-noise\"",
+                "echo \"pip-stderr-noise\" >&2",
+                "exit 0",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_pip.chmod(fake_pip.stat().st_mode | stat.S_IXUSR)
+
+    fake_hermit = venv_bin / "hermit"
+    fake_hermit.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"initialize\"}'",
+                "exit 0",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_hermit.chmod(fake_hermit.stat().st_mode | stat.S_IXUSR)
+
+    env = dict(os.environ)
+    env["HERMIT_HOME"] = str(fake_home)
+    env["HERMIT_SKIP_STARTUP_UPDATE_CHECK"] = "1"
+
+    result = subprocess.run(
+        ["node", str(hermit_script), "mcp-server"],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "[hermit] Syncing managed runtime to" not in result.stdout
+    assert "pip-stdout-noise" not in result.stdout
+    assert result.stdout == '{"jsonrpc":"2.0","method":"initialize"}\n'
+    assert "[hermit] Syncing managed runtime to" in result.stderr
+    assert "pip-stderr-noise" in result.stderr
