@@ -32,6 +32,11 @@ def maybe_start_codex_channels_wait_session(
 
 
 class CodexChannelsInteractiveSink:
+    # Cache health-check results for this many seconds so that rapid
+    # back-to-back notify() calls (e.g. multiple permission prompts in
+    # the same tool batch) do not each incur a network round-trip.
+    _HEALTH_CACHE_TTL: float = 5.0
+
     def __init__(
         self,
         *,
@@ -52,23 +57,34 @@ class CodexChannelsInteractiveSink:
         self._log = log_fn or (lambda _line: None)
         self.sessions: dict[str, Any] = {}
         self.lock = threading.Lock()
+        self._health_cache: tuple[float, bool] = (0.0, False)
 
     def is_available(self, *, settings: Any) -> bool:
-        """Check if the codex-channels server is reachable."""
+        """Check if the codex-channels server is reachable.
+
+        Results are cached for ``_HEALTH_CACHE_TTL`` seconds so that
+        consecutive notify() calls avoid redundant network round-trips.
+        """
         if not getattr(settings, "enabled", False):
             return False
+
+        now = time.monotonic()
+        cached_at, cached_result = self._health_cache
+        if now - cached_at < self._HEALTH_CACHE_TTL:
+            return cached_result
+
         try:
             url = f"http://{settings.host}:{settings.port}/health"
             with urllib.request.urlopen(url, timeout=2) as resp:
-                return resp.status == 200
+                result = resp.status == 200
         except Exception:
-            return False
+            result = False
+
+        self._health_cache = (now, result)
+        return result
 
     def notify(self, prompt: InteractivePrompt) -> None:
         settings = self._settings_loader(prompt)
-        if not self.is_available(settings=settings):
-            return  # silently degrade — no codex-channels server
-
         session = maybe_start_codex_channels_wait_session(
             prompt,
             settings=settings,
