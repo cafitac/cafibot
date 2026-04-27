@@ -464,40 +464,38 @@ def _run_status_watch(*, cwd: str, interval: float) -> None:
         print("\n[Hermit] Stopped status watch.")
 
 
+def _extract_cwd(argv: list[str]) -> str:
+    """Extract ``--cwd`` / ``--cwd=`` from *argv*, falling back to ``os.getcwd()``."""
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--cwd" and i + 1 < len(argv):
+            return argv[i + 1]
+        if argv[i].startswith("--cwd="):
+            return argv[i].split("=", 1)[1]
+        i += 1
+    return os.getcwd()
+
+
 def _dispatch_codex_channels() -> None:
     """Handle `hermit_agent codex-channels {install|status|start|stop}`."""
     args = sys.argv[2:]
-    if not args or args[0] not in ("install", "status", "start", "stop"):
+    handlers = {
+        "install": _run_codex_channels_install,
+        "status": _run_codex_channels_status,
+        "start": _run_codex_channels_start,
+        "stop": _run_codex_channels_stop,
+    }
+
+    sub = args[0] if args else None
+    if sub not in handlers:
         print(
             "Usage: hermit_agent codex-channels {install|status|start|stop}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    sub = args[0]
-    rest = args[1:]
-
-    # Extract --cwd from remaining args
-    cwd = os.getcwd()
-    i = 0
-    while i < len(rest):
-        if rest[i] == "--cwd" and i + 1 < len(rest):
-            cwd = rest[i + 1]
-            i += 2
-        elif rest[i].startswith("--cwd="):
-            cwd = rest[i].split("=", 1)[1]
-            i += 1
-        else:
-            i += 1
-
-    if sub == "install":
-        _run_codex_channels_install(cwd=cwd)
-    elif sub == "status":
-        _run_codex_channels_status(cwd=cwd)
-    elif sub == "start":
-        _run_codex_channels_start(cwd=cwd)
-    elif sub == "stop":
-        _run_codex_channels_stop(cwd=cwd)
+    cwd = _extract_cwd(args[1:])
+    handlers[sub](cwd=cwd)
 
 
 def _run_codex_channels_install(*, cwd: str, codex_command: str = "codex") -> None:
@@ -514,37 +512,50 @@ def _run_codex_channels_install(*, cwd: str, codex_command: str = "codex") -> No
         sys.exit(1)
 
 
-def _run_codex_channels_status(*, cwd: str) -> None:
-    import urllib.request
+def _load_codex_channels_settings(cwd: str):
+    """Load merged codex-channels settings for *cwd*."""
     from .codex.channels_adapter import load_codex_channels_settings
     from .config import load_settings
-    cfg = load_settings(cwd=cwd)
-    settings = load_codex_channels_settings(cfg, cwd)
+
+    return load_codex_channels_settings(load_settings(cwd=cwd), cwd)
+
+
+def _codex_channels_runtime_dir(settings, cwd: str):
+    """Resolve the runtime directory for codex-channels."""
+    from pathlib import Path
+
+    return Path(settings.runtime_dir) if settings.runtime_dir else Path(cwd) / ".hermit"
+
+
+def _run_codex_channels_status(*, cwd: str) -> None:
+    import urllib.request
+
+    settings = _load_codex_channels_settings(cwd)
     if not settings.enabled:
         print("codex-channels: disabled")
         return
+
+    addr = f"http://{settings.host}:{settings.port}"
     try:
-        url = f"http://{settings.host}:{settings.port}/health"
-        with urllib.request.urlopen(url, timeout=2) as resp:
+        with urllib.request.urlopen(f"{addr}/health", timeout=2) as resp:
             if resp.status == 200:
-                print(f"codex-channels: reachable (http://{settings.host}:{settings.port})")
+                print(f"codex-channels: reachable ({addr})")
                 return
     except Exception:
         pass
-    print(f"codex-channels: unreachable (http://{settings.host}:{settings.port})")
+    print(f"codex-channels: unreachable ({addr})")
     raise SystemExit(1)
 
 
 def _run_codex_channels_start(*, cwd: str) -> None:
     import subprocess
-    from pathlib import Path
-    from .codex.channels_adapter import build_runtime_serve_command, load_codex_channels_settings
-    from .config import load_settings
-    cfg = load_settings(cwd=cwd)
-    settings = load_codex_channels_settings(cfg, cwd)
+
+    settings = _load_codex_channels_settings(cwd)
+    from .codex.channels_adapter import build_runtime_serve_command
+
     serve_cmd = build_runtime_serve_command(settings=settings)
     proc = subprocess.Popen(serve_cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    runtime_dir = Path(settings.runtime_dir) if settings.runtime_dir else Path(cwd) / ".hermit"
+    runtime_dir = _codex_channels_runtime_dir(settings, cwd)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     pid_file = runtime_dir / "codex-channels.pid"
     pid_file.write_text(str(proc.pid))
@@ -554,22 +565,21 @@ def _run_codex_channels_start(*, cwd: str) -> None:
 def _run_codex_channels_stop(*, cwd: str) -> None:
     import os as _os
     import signal
-    from pathlib import Path
-    from .codex.channels_adapter import load_codex_channels_settings
-    from .config import load_settings
-    cfg = load_settings(cwd=cwd)
-    settings = load_codex_channels_settings(cfg, cwd)
-    runtime_dir = Path(settings.runtime_dir) if settings.runtime_dir else Path(cwd) / ".hermit"
+
+    settings = _load_codex_channels_settings(cwd)
+    runtime_dir = _codex_channels_runtime_dir(settings, cwd)
     pid_file = runtime_dir / "codex-channels.pid"
     if not pid_file.exists():
         print("codex-channels: not running (no pid file)")
         return
+
     try:
         pid = int(pid_file.read_text().strip())
     except ValueError:
         pid_file.unlink(missing_ok=True)
         print("codex-channels: invalid pid file, removed")
         return
+
     try:
         _os.kill(pid, signal.SIGTERM)
         print(f"codex-channels: stopped (pid={pid})")
@@ -584,14 +594,13 @@ def _dispatch_learner() -> None:
     import shutil
     import subprocess
 
-    args = sys.argv[2:]
-    sub = args[0] if args else "status"
-    extra = args[1:] if len(args) > 1 else []
-    valid = {"init", "status", "dashboard", "process", "inject"}
+    _VALID_SUBS = {"init", "status", "dashboard", "process", "inject"}
 
-    if sub not in valid:
+    argv = sys.argv[2:]
+    sub = argv[0] if argv else "status"
+    if sub not in _VALID_SUBS:
         print(
-            f"Usage: hermit_agent learner {{{('|'.join(sorted(valid)))}}}",
+            f"Usage: hermit_agent learner {{{('|'.join(sorted(_VALID_SUBS)))}}}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -606,6 +615,7 @@ def _dispatch_learner() -> None:
         )
         sys.exit(1)
 
+    extra = argv[1:]
     cmd = ["agent-learner", sub, "--project-root", os.getcwd()] + extra
     result = subprocess.run(cmd)
     sys.exit(result.returncode)
