@@ -17,7 +17,6 @@ Example settings file:
     "max_turns": 200,
     "routing": {
       "priority_models": [
-        {"model": "gpt-5.4", "reasoning_effort": "medium"},
         {"model": "glm-5.1"},
         {"model": "qwen3-coder:30b"}
       ]
@@ -60,7 +59,6 @@ DEFAULTS: dict[str, Any] = {
     "model": "qwen3-coder:30b",
     "routing": {
         "priority_models": [
-            {"model": "gpt-5.4", "reasoning_effort": "medium"},
             {"model": "glm-5.1"},
             {"model": "qwen3-coder:30b"},
         ]
