@@ -17,6 +17,18 @@ Hermit adds a dedicated execution lane to your coding-agent stack. Keep Claude C
 - It defaults toward cost-predictable local or flat-rate models instead of surprising hosted fallback behavior.
 - It works across multiple orchestrators, which makes it easier to adopt as shared team infrastructure.
 
+## Audience fit
+
+### Great fit
+- Teams already invested in Claude Code or Codex that want a dedicated execution lane.
+- Repositories where test runs, refactors, commits, and release chores are burning expensive planner tokens.
+- Maintainers who want one MCP executor path shared across multiple orchestrators.
+
+### Weak fit
+- Users who want Hermit itself to be the premium planner.
+- Teams that are happy with one hosted model doing both judgment and execution.
+- Very small workflows where planner/executor separation adds more ceremony than value.
+
 ## Social preview copy ideas
 
 ### Option A
@@ -31,6 +43,26 @@ Use Hermit for the repetitive coding work.
 Claude Code or Codex plans.
 Hermit executes.
 Your bill stays predictable.
+
+## Homepage / hero copy variants
+
+### Variant A
+Keep the premium orchestrator for judgment.
+Use Hermit for the repetitive repo work.
+
+### Variant B
+Claude Code or Codex thinks.
+Hermit ships the mechanical follow-through.
+
+### Variant C
+One MCP executor layer.
+Cheaper execution across multiple orchestrators.
+
+## Social preview asset
+
+- Starter asset: `docs/assets/hermit-social-preview.svg`
+- Intended use: GitHub social preview image mockups, release cards, launch posts, and docs screenshots.
+- Design direction: dark terminal-like card, premium planner on top, cheaper execution lane underneath, no provider-specific billing claims beyond predictable local / flat-rate defaults.
 
 ## Release-note framing
 
