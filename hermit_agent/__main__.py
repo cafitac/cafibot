@@ -492,6 +492,12 @@ def _dispatch_codex_channels() -> None:
 
     if sub == "install":
         _run_codex_channels_install(cwd=cwd)
+    elif sub == "status":
+        _run_codex_channels_status(cwd=cwd)
+    elif sub == "start":
+        _run_codex_channels_start(cwd=cwd)
+    elif sub == "stop":
+        _run_codex_channels_stop(cwd=cwd)
 
 
 def _run_codex_channels_install(*, cwd: str, codex_command: str = "codex") -> None:
@@ -506,6 +512,71 @@ def _run_codex_channels_install(*, cwd: str, codex_command: str = "codex") -> No
     except Exception as exc:
         print(f"codex-channels install failed: {exc}", file=sys.stderr)
         sys.exit(1)
+
+
+def _run_codex_channels_status(*, cwd: str) -> None:
+    import urllib.request
+    from .codex.channels_adapter import load_codex_channels_settings
+    from .config import load_settings
+    cfg = load_settings(cwd=cwd)
+    settings = load_codex_channels_settings(cfg, cwd)
+    if not settings.enabled:
+        print("codex-channels: disabled")
+        return
+    try:
+        url = f"http://{settings.host}:{settings.port}/health"
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            if resp.status == 200:
+                print(f"codex-channels: reachable (http://{settings.host}:{settings.port})")
+                return
+    except Exception:
+        pass
+    print(f"codex-channels: unreachable (http://{settings.host}:{settings.port})")
+    raise SystemExit(1)
+
+
+def _run_codex_channels_start(*, cwd: str) -> None:
+    import subprocess
+    from pathlib import Path
+    from .codex.channels_adapter import build_runtime_serve_command, load_codex_channels_settings
+    from .config import load_settings
+    cfg = load_settings(cwd=cwd)
+    settings = load_codex_channels_settings(cfg, cwd)
+    serve_cmd = build_runtime_serve_command(settings=settings)
+    proc = subprocess.Popen(serve_cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    runtime_dir = Path(settings.runtime_dir) if settings.runtime_dir else Path(cwd) / ".hermit"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = runtime_dir / "codex-channels.pid"
+    pid_file.write_text(str(proc.pid))
+    print(f"codex-channels: started (pid={proc.pid}, pid_file={pid_file})")
+
+
+def _run_codex_channels_stop(*, cwd: str) -> None:
+    import os as _os
+    import signal
+    from pathlib import Path
+    from .codex.channels_adapter import load_codex_channels_settings
+    from .config import load_settings
+    cfg = load_settings(cwd=cwd)
+    settings = load_codex_channels_settings(cfg, cwd)
+    runtime_dir = Path(settings.runtime_dir) if settings.runtime_dir else Path(cwd) / ".hermit"
+    pid_file = runtime_dir / "codex-channels.pid"
+    if not pid_file.exists():
+        print("codex-channels: not running (no pid file)")
+        return
+    try:
+        pid = int(pid_file.read_text().strip())
+    except ValueError:
+        pid_file.unlink(missing_ok=True)
+        print("codex-channels: invalid pid file, removed")
+        return
+    try:
+        _os.kill(pid, signal.SIGTERM)
+        print(f"codex-channels: stopped (pid={pid})")
+    except ProcessLookupError:
+        print(f"codex-channels: process {pid} not found (stale pid)")
+    finally:
+        pid_file.unlink(missing_ok=True)
 
 
 def _dispatch_learner() -> None:
