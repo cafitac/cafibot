@@ -19,7 +19,17 @@
 
 ## How it works
 
-![Hermit README hero](docs/assets/hermit-readme-hero.svg)
+```
+┌──────────────┐
+│  Claude Code │──┐
+│  (planner)   │  │    ┌──────────────┐   any OpenAI-compatible   ┌───────┐
+└──────────────┘  ├───▶│  HermitAgent │ ────────────────────────▶ │  LLM  │
+                  │    │  (executor)  │                           └───────┘
+┌──────────────┐  │    └──────────────┘
+│    Codex     │──┘         ~$0 / flat-rate
+│  (planner)   │
+└──────────────┘
+```
 
 Claude Code or Codex stays in charge of planning, interviewing, and review. Hermit takes the mechanical path: file edits, test runs, refactors, commits, and MCP-executed follow-through on predictable local or flat-rate execution models. The switch is one word in a slash command: `/foo` → `/foo-hermit`.
 
