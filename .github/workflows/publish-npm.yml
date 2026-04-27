@@ -9,13 +9,97 @@ on:
       - 'hermit_agent/**'
       - 'pyproject.toml'
   workflow_dispatch:
+    inputs:
+      force_publish:
+        description: "Publish even if this commit only changes release metadata files"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
+  classify_release:
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.classify.outputs.should_publish }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify release trigger
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_PUBLISH: ${{ github.event.inputs.force_publish || 'false' }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || '' }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$FORCE_PUBLISH" == "true" ]]; then
+              echo "should_publish=true" >> "$GITHUB_OUTPUT"
+              echo "reason=manual workflow_dispatch with force_publish=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              echo "reason=manual workflow_dispatch requires force_publish=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          if [[ "$COMMIT_MESSAGE" == *"[skip release]"* ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=commit message requested [skip release]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$COMMIT_MESSAGE" =~ ^chore:\ release\ v[0-9] ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=release write-back commit detected" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -t changed_files < <(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")
+          printf 'Changed files (%s):\n' "${#changed_files[@]}"
+          printf ' - %s\n' "${changed_files[@]}"
+
+          if [[ ${#changed_files[@]} -eq 0 ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no changed files detected" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          release_only=true
+          for path in "${changed_files[@]}"; do
+            case "$path" in
+              pyproject.toml|hermit-ui/package.json)
+                ;;
+              *)
+                release_only=false
+                break
+                ;;
+            esac
+          done
+
+          if [[ "$release_only" == "true" ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "reason=release metadata only change" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          echo "reason=code or package payload changed" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: classify_release
+    if: needs.classify_release.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -32,7 +116,10 @@ jobs:
         run: pytest tests/ -q
 
   publish:
-    needs: test
+    needs:
+      - classify_release
+      - test
+    if: needs.classify_release.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -108,7 +195,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}"
           git add pyproject.toml hermit-ui/package.json
-          git diff --staged --quiet || git commit -m "chore: release v${NEXT} [skip ci]"
+          git diff --staged --quiet || git commit -m "chore: release v${NEXT} [skip ci] [skip release]"
           git tag "v${NEXT}" || echo "Tag v${NEXT} already exists, skipping"
           git push origin HEAD:main --tags || {
             echo "::warning::Write-back push blocked by branch protection."
