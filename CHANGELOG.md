@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Release workflow safety
+- Hardened `Publish npm + PyPI` so pushes that only sync `pyproject.toml` and `hermit-ui/package.json` no longer cut an accidental follow-up patch release.
+- Added a `classify_release` gate that skips release runs for release write-back commits and for explicit `[skip release]` commits.
+- Made manual `workflow_dispatch` releases opt-in via `force_publish=true` so accidental button-clicks do not publish by default.
+
 ### Install and model-selection UX
 - Switched the primary onboarding flow to `npm install -g @cafitac/hermit-agent` followed by `hermit`, with guided setup offered from startup when Claude Code or Codex integration is incomplete.
 - Added interactive startup update prompts for user-facing `hermit` commands so newer npm releases can be installed before continuing.
