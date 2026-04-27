@@ -13,6 +13,7 @@ const appJs = join(__dirname, '..', 'dist', 'app.js');
 const rawArgs = process.argv.slice(2);
 const command = rawArgs[0] ?? '';
 const packageName = '@cafitac/hermit-agent';
+const silentBootstrapCommand = command === 'mcp-server';
 
 function runtimeHome() {
   return process.env.HERMIT_HOME || homedir();
@@ -62,6 +63,14 @@ function readManagedRuntimeVersion(venvPython) {
   if (result.status !== 0) return null;
   const version = String(result.stdout ?? '').trim();
   return version || null;
+}
+
+function launcherLog(message) {
+  if (silentBootstrapCommand) {
+    console.error(message);
+    return;
+  }
+  console.log(message);
 }
 
 function isInteractivePromptAllowed() {
@@ -264,11 +273,11 @@ function syncManagedRuntime(expectedVersion) {
   const pip = join(dirname(venvPython), process.platform === 'win32' ? 'pip.exe' : 'pip');
   if (!existsSync(pip)) return;
 
-  console.log(`[hermit] Syncing managed runtime to v${expectedVersion}...`);
+  launcherLog(`[hermit] Syncing managed runtime to v${expectedVersion}...`);
   const install = spawnSync(
     pip,
     ['install', '--quiet', '--upgrade', `cafitac-hermit-agent==${expectedVersion}`],
-    { stdio: 'inherit' },
+    { stdio: silentBootstrapCommand ? ['ignore', 'ignore', 'inherit'] : 'inherit' },
   );
   if (install.status !== 0) {
     console.error(`[hermit] Failed to sync managed runtime to v${expectedVersion}.`);
@@ -291,7 +300,7 @@ function bootstrapRuntime() {
     return; // already set up
   }
 
-  console.log('[hermit] First run: setting up Python runtime...');
+  launcherLog('[hermit] First run: setting up Python runtime...');
 
   // Find a suitable system Python 3
   const candidates = process.platform === 'win32'
@@ -311,8 +320,12 @@ function bootstrapRuntime() {
   }
 
   // Create venv
-  console.log('[hermit] Creating venv at ~/.hermit/npm-runtime/venv ...');
-  const mkVenv = spawnSync(sysPython, ['-m', 'venv', venvDir], { stdio: 'inherit' });
+  launcherLog('[hermit] Creating venv at ~/.hermit/npm-runtime/venv ...');
+  const mkVenv = spawnSync(
+    sysPython,
+    ['-m', 'venv', venvDir],
+    { stdio: silentBootstrapCommand ? ['ignore', 'ignore', 'inherit'] : 'inherit' },
+  );
   if (mkVenv.status !== 0) {
     console.error('[hermit] Failed to create venv.');
     process.exit(1);
@@ -320,13 +333,17 @@ function bootstrapRuntime() {
 
   // Install hermit Python package
   const pip = join(venvDir, process.platform === 'win32' ? 'Scripts/pip' : 'bin/pip');
-  console.log('[hermit] Installing cafitac-hermit-agent...');
-  const install = spawnSync(pip, ['install', '--quiet', 'cafitac-hermit-agent'], { stdio: 'inherit' });
+  launcherLog('[hermit] Installing cafitac-hermit-agent...');
+  const install = spawnSync(
+    pip,
+    ['install', '--quiet', 'cafitac-hermit-agent'],
+    { stdio: silentBootstrapCommand ? ['ignore', 'ignore', 'inherit'] : 'inherit' },
+  );
   if (install.status !== 0) {
     console.error('[hermit] Failed to install cafitac-hermit-agent.');
     process.exit(1);
   }
-  console.log('[hermit] Runtime ready.\n');
+  launcherLog('[hermit] Runtime ready.\n');
 }
 
 if (command === 'update' || command === 'self-update') {
