@@ -12,6 +12,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: publish-main
+  cancel-in-progress: false
+
 permissions:
   contents: write
   id-token: write
@@ -111,13 +115,52 @@ jobs:
       - name: Run pytest suite
         run: pytest tests/ -q
 
-  publish:
+  determine_version:
     needs:
       - classify_release
       - test
     if: needs.classify_release.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      next_version: ${{ steps.version.outputs.next_version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      published_version: ${{ steps.version.outputs.published_version }}
+      local_version: ${{ steps.version.outputs.local_version }}
+    steps:
+      - uses: actions/checkout@v6
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Determine next patch version from registry
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PUBLISHED=$(npm view @cafitac/hermit-agent version 2>/dev/null || echo "0.0.0")
+          LOCAL=$(node -p "require('./hermit-ui/package.json').version")
+          BASE=$(printf '%s\n%s\n' "$PUBLISHED" "$LOCAL" | sort -V | tail -1)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          echo "published_version=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          echo "local_version=$LOCAL" >> "$GITHUB_OUTPUT"
+          echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "release_tag=v$NEXT" >> "$GITHUB_OUTPUT"
+
+          echo "Next version: $NEXT (registry: $PUBLISHED, local: $LOCAL)"
+
+  publish_npm:
+    needs:
+      - classify_release
+      - test
+      - determine_version
+    if: needs.classify_release.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      NEXT: ${{ needs.determine_version.outputs.next_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -130,34 +173,28 @@ jobs:
           cache: npm
           cache-dependency-path: hermit-ui/package-lock.json
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-          cache: pip
-
       - name: Install dependencies
         working-directory: hermit-ui
         run: npm ci
 
+      - name: Update npm package version for release
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import os
+
+          path = Path('hermit-ui/package.json')
+          data = json.loads(path.read_text())
+          data['version'] = os.environ['NEXT']
+          path.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
       - name: Build
         working-directory: hermit-ui
         run: npm run build
-
-      - name: Bump to next patch version from registry
-        run: |
-          PUBLISHED=$(npm view @cafitac/hermit-agent version 2>/dev/null || echo "0.0.0")
-          LOCAL=$(node -p "require('./hermit-ui/package.json').version")
-          # Use whichever is higher as the base so pre-bumped local versions don't conflict
-          BASE=$(printf '%s\n%s\n' "$PUBLISHED" "$LOCAL" | sort -V | tail -1)
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
-          NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
-          echo "Publishing version $NEXT (registry: $PUBLISHED, local: $LOCAL)"
-          echo "NEXT=$NEXT" >> "$GITHUB_ENV"
-          # Bump npm package.json (hermit-ui)
-          npm version "$NEXT" --no-git-tag-version --prefix hermit-ui
-          # Sync pyproject.toml
-          sed -i "s/^version = \".*\"/version = \"$NEXT\"/" pyproject.toml
 
       - name: Verify npm package shape
         working-directory: hermit-ui
@@ -167,7 +204,50 @@ jobs:
         working-directory: hermit-ui
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npm view "@cafitac/hermit-agent@${NEXT}" version >/dev/null 2>&1; then
+            echo "Version ${NEXT} is already present on npm; skipping publish."
+            exit 0
+          fi
+          npm publish --access public --provenance
+
+  publish_pypi:
+    needs:
+      - classify_release
+      - test
+      - determine_version
+    if: needs.classify_release.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      NEXT: ${{ needs.determine_version.outputs.next_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Update Python package version for release
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path('pyproject.toml')
+          text = path.read_text()
+          text, count = re.subn(r'^version\s*=\s*"[^"]+"', f'version = "{os.environ["NEXT"]}"', text, count=1, flags=re.M)
+          if count != 1:
+            raise SystemExit('Failed to update pyproject version')
+          path.write_text(text)
+          PY
 
       - name: Build Python distributions
         run: |
@@ -181,25 +261,92 @@ jobs:
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
 
-      - name: Write back version and tag
-        env:
-          # Prefer GH_PAT when present so repo admins can bypass rulesets.
-          # Fall back to GITHUB_TOKEN, and if main rejects the push, open a sync PR instead.
-          PUSH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+  push_release_tag:
+    needs:
+      - classify_release
+      - determine_version
+      - publish_npm
+      - publish_pypi
+    if: needs.classify_release.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ needs.determine_version.outputs.release_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Push release tag
         shell: bash
         run: |
           set -euo pipefail
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${RELEASE_TAG} already exists on origin; skipping tag push."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
+          git tag "${RELEASE_TAG}" "${GITHUB_SHA}"
+          git push origin "${RELEASE_TAG}"
+          echo "Pushed release tag ${RELEASE_TAG}."
+
+  write_back_release_metadata:
+    needs:
+      - classify_release
+      - determine_version
+      - push_release_tag
+    if: needs.classify_release.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      NEXT: ${{ needs.determine_version.outputs.next_version }}
+      PUSH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Sync version files back to repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          next_version = os.environ['NEXT']
+
+          pyproject = Path('pyproject.toml')
+          text = pyproject.read_text()
+          text, count = re.subn(r'^version\s*=\s*"[^"]+"', f'version = "{next_version}"', text, count=1, flags=re.M)
+          if count != 1:
+            raise SystemExit('Failed to update pyproject version')
+          pyproject.write_text(text)
+
+          package_json = Path('hermit-ui/package.json')
+          data = json.loads(package_json.read_text())
+          data['version'] = next_version
+          package_json.write_text(json.dumps(data, indent=2) + '\n')
+          PY
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}"
 
           git add pyproject.toml hermit-ui/package.json
-          git diff --staged --quiet || git commit -m "chore: release v${NEXT} [skip ci] [skip release]"
-          git tag "v${NEXT}" || echo "Tag v${NEXT} already exists, skipping"
+          git diff --staged --quiet && {
+            echo "Version files already match ${NEXT}; no write-back needed."
+            exit 0
+          }
 
-          git push origin "v${NEXT}" || echo "::warning::Tag push failed; continuing to preserve published artifacts."
+          git commit -m "chore: release v${NEXT} [skip ci] [skip release]"
 
           if git push origin HEAD:main; then
             echo "Write-back pushed directly to main."
@@ -227,10 +374,10 @@ jobs:
           printf '%s\n' \
             '## Summary' \
             "- sync pyproject.toml and hermit-ui/package.json to the already-published release version ${NEXT}" \
-            '- preserve the release tag and registry state when protected main blocks workflow write-back' \
+            '- preserve the GitHub Release, tag, and package registry state when protected main blocks workflow write-back' \
             '' \
             '## Why' \
-            "- npm + PyPI publish already succeeded for ${NEXT}" \
+            "- npm, PyPI, and GitHub Release creation already succeeded for ${NEXT}" \
             '- direct workflow push to main was rejected by the repository ruleset' \
             '- this PR keeps repository version files aligned without requiring a force-bypass token' \
             '' \

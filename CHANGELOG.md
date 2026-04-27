@@ -7,7 +7,10 @@
 - Metadata-only version syncs (`pyproject.toml` + `hermit-ui/package.json`), release write-back commits, and explicit `[skip release]` commits are still skipped so the repo does not cut meaningless follow-up patch releases.
 - Added a `classify_release` gate that skips release runs for release write-back commits and for explicit `[skip release]` commits.
 - Made manual `workflow_dispatch` releases opt-in via `force_publish=true` so accidental button-clicks do not publish by default.
-- Fixed release write-back to use the configured push token correctly, and added a protected-`main` fallback that opens a sync PR when direct write-back is rejected.
+- Split the release automation into clearer stages: version determination, npm publish, PyPI publish, release-tag push, GitHub Release publication, and repository write-back / sync-PR fallback.
+- Added a dedicated `Publish GitHub Release` workflow on `v*` tags so the Releases page stays aligned with npm, PyPI, and git tags.
+- Added release-workflow concurrency plus idempotent npm publish, tag-push, and GitHub Release checks so reruns do not accidentally create duplicate artifacts.
+- Fixed release write-back to use the configured push token correctly, and kept the protected-`main` fallback that opens a sync PR when direct write-back is rejected.
 
 ### Install and model-selection UX
 - Switched the primary onboarding flow to `npm install -g @cafitac/hermit-agent` followed by `hermit`, with guided setup offered from startup when Claude Code or Codex integration is incomplete.
