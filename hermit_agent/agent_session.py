@@ -320,8 +320,6 @@ class CLIAgentSession(AgentSessionBase):
     _session_mode = 'single'
     _session_kind = 'cli'
 
-    _session_mode = 'single'
-
     def __init__(
         self,
         llm: "LLMClientBase",

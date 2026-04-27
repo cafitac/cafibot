@@ -217,11 +217,14 @@ class AgentLoop:
         """Exit handling after running OnExit hooks. Auto-saves handoff when HERMIT_AUTO_WRAP=1."""
         self.hook_runner.run_hooks(HookEvent.ON_EXIT, "", {})
         # OnStop: fire hook + agent-learner process for WRITE path
-        self.hook_runner.run_hooks(HookEvent.ON_STOP, "", {
-            "session_id": self.session_id,
-            "model_id": getattr(self.llm, "model_id", ""),
-            "tool_call_count": self._tool_call_count,
-        })
+        try:
+            self.hook_runner.run_hooks(HookEvent.ON_STOP, "", {
+                "session_id": self.session_id,
+                "model_id": getattr(self.llm, "model_id", ""),
+                "tool_call_count": self._tool_call_count,
+            })
+        except Exception as exc:
+            _logger.warning("ON_STOP hook failed: %s", exc)
         self._run_agent_learner_on_stop()
         try:
             from .session_wrap import maybe_auto_wrap
@@ -249,7 +252,10 @@ class AgentLoop:
             _logger.warning("KB save_pending failed: %s", exc)
 
     def _run_agent_learner_on_stop(self) -> None:
-        """Launch agent-learner process on stop if installed."""
+        """Fire-and-forget agent-learner process on stop if installed.
+
+        Uses start_new_session so the child survives parent SIGINT/SIGTERM.
+        """
         if self.session_kind in ("gateway", "mcp"):
             return
         if not shutil.which("agent-learner"):
@@ -259,16 +265,17 @@ class AgentLoop:
                 [
                     "agent-learner", "process",
                     "--adapter", "hermit",
-                    "--session-id", str(self.session_id or ""),
-                    "--cwd", str(self.cwd),
+                    "--session-id", self.session_id or "",
+                    "--cwd", self.cwd,
                     "--model-id", str(getattr(self.llm, "model_id", "")),
                     "--auto",
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
         except Exception:
-            pass  # agent-learner not installed — silently skip
+            pass  # best-effort: silently skip if spawn fails
 
     def _execute_tool(self, name: str, arguments: dict) -> ToolResult:
         return self._executor.execute_tool(name, arguments)
