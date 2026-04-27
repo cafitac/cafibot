@@ -15,7 +15,7 @@
 
 > Hidden expert. Quiet executor.
 >
-> Hermit is an MCP executor for Claude Code or Codex: your orchestrator plans and reviews in the spotlight; Hermit quietly handles edits, test runs, commits, refactors, and other mechanical work on a cheaper local or flat-rate model.
+> Hermit is an MCP executor for Claude Code and Codex. Your main agent handles planning, review, and conversation; Hermit quietly handles edits, test runs, refactors, commits, and other mechanical execution on a cheaper local or flat-rate model.
 
 ## How it works
 
