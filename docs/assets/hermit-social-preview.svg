@@ -1,0 +1,25 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1280" height="640" rx="32" fill="#0B1020"/>
+  <rect x="40" y="40" width="1200" height="560" rx="24" fill="#0F172A" stroke="#1E293B" stroke-width="2"/>
+  <circle cx="88" cy="88" r="8" fill="#FB7185"/>
+  <circle cx="116" cy="88" r="8" fill="#F59E0B"/>
+  <circle cx="144" cy="88" r="8" fill="#22C55E"/>
+  <text x="178" y="94" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="22">HermitAgent</text>
+
+  <text x="84" y="180" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="700">Keep the premium orchestrator</text>
+  <text x="84" y="246" fill="#E2E8F0" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="700">for judgment.</text>
+  <text x="84" y="332" fill="#38BDF8" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="700">Use Hermit for the repetitive repo work.</text>
+
+  <rect x="84" y="400" width="510" height="124" rx="20" fill="#111827" stroke="#334155" stroke-width="2"/>
+  <text x="116" y="448" fill="#F8FAFC" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="600">Claude Code / Codex</text>
+  <text x="116" y="490" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="24">planning • review • judgment</text>
+
+  <rect x="648" y="400" width="548" height="124" rx="20" fill="#082F49" stroke="#0EA5E9" stroke-width="2"/>
+  <text x="680" y="448" fill="#E0F2FE" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="600">Hermit MCP executor lane</text>
+  <text x="680" y="490" fill="#BAE6FD" font-family="Inter, Arial, sans-serif" font-size="24">edits • tests • commits • release follow-through</text>
+
+  <path d="M612 462H642" stroke="#64748B" stroke-width="6" stroke-linecap="round"/>
+  <path d="M628 446L644 462L628 478" stroke="#64748B" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="84" y="570" fill="#94A3B8" font-family="Inter, Arial, sans-serif" font-size="24">MCP executor for Claude Code or Codex • predictable local / flat-rate execution by default</text>
+</svg>

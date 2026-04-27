@@ -39,6 +39,21 @@ Why Hermit stands out:
 
 Hermit is not trying to replace your orchestrator. It gives you a second lane: use the premium model for judgment, and use Hermit for the mechanical throughput that makes repositories expensive to operate at scale.
 
+## Who Hermit is for
+
+- Teams that already like Claude Code or Codex for planning, review, and decision-making, but want a cheaper execution lane for repo mechanics.
+- Developers who want MCP-driven follow-through on edits, tests, commits, and release chores without spending premium-model tokens on every step.
+- Repositories that need predictable default routing toward local or flat-rate models instead of surprising hosted fallback costs.
+- Maintainers who want one shared executor layer even if different contributors prefer different orchestrators.
+
+## Who Hermit is not for
+
+- People looking for a brand-new premium planner to replace Claude Code or Codex entirely.
+- Teams that want a single hosted model to do both judgment and execution with no planner/executor split.
+- Workflows where provider cost predictability, MCP task handoff, and execution-lane separation are not important.
+
+If your pain is not "my orchestrator is smart enough, but too much of its time is spent on repetitive repo labor," Hermit is probably not the right abstraction.
+
 ## Install
 
 ```bash
@@ -146,5 +161,6 @@ MIT — see [LICENSE](LICENSE).
 - [docs/hermit-variants.md](docs/hermit-variants.md) — the `-hermit` skill family
 - [docs/measure-savings.md](docs/measure-savings.md) — cost-savings measurement protocol
 - [docs/open-source-positioning.md](docs/open-source-positioning.md) — short public-facing copy for descriptions, releases, and future social previews
+- [docs/assets/hermit-social-preview.svg](docs/assets/hermit-social-preview.svg) — editable social-preview starter asset for repo cards and launch posts
 - [CHANGELOG.md](CHANGELOG.md) — notable release and policy changes
 - [benchmarks/](benchmarks/) — reproducible task specs and community datapoints
