@@ -4,6 +4,7 @@
 [![npm version](https://img.shields.io/npm/v/@cafitac/hermit-agent?cacheSeconds=300)](https://www.npmjs.com/package/@cafitac/hermit-agent)
 [![PyPI version](https://img.shields.io/pypi/v/cafitac-hermit-agent?cacheSeconds=300)](https://pypi.org/project/cafitac-hermit-agent/)
 [![npm downloads](https://img.shields.io/npm/dm/@cafitac/hermit-agent?cacheSeconds=300)](https://www.npmjs.com/package/@cafitac/hermit-agent)
+[![SafeSkill 50/100](https://img.shields.io/badge/SafeSkill-50%2F100_Use%20with%20Caution-orange)](https://safeskill.dev/scan/cafitac-hermit-agent)
 
 > Run Claude Code or Codex cheaper — Hermit is an MCP executor that handles the high-token mechanical work while your orchestrator stays in charge.
 
