@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -44,3 +45,10 @@ def test_developer_docs_use_python_module_pytest_entrypoint():
     }
 
     assert offending_docs == {}
+
+
+def test_npm_hermit_launcher_is_executable_for_local_global_installs():
+    """Local `npm install -g ./hermit-ui` links this file directly; it must be executable."""
+    launcher = REPO_ROOT / "hermit-ui" / "bin" / "hermit.js"
+
+    assert os.access(launcher, os.X_OK)

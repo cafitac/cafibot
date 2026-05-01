@@ -146,10 +146,13 @@ def test_ensure_hermes_mcp_registered_adds_missing_channel(tmp_path, monkeypatch
 
     def fake_run(args, **kwargs):
         calls.append(args)
-        if args == ["hermes", "mcp", "list"]:
+        if args == ["hermes", "mcp", "list"] and len(calls) == 1:
             return Result(returncode=0, stdout="No MCP servers configured.\n")
         if args == ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"]:
-            return Result(returncode=0, stdout="Added MCP server hermit-channel\n")
+            assert kwargs["input"] == "y\n"
+            return Result(returncode=0, stdout="Connected! Found 5 tool(s) from 'hermit-channel'\n")
+        if args == ["hermes", "mcp", "list"] and len(calls) == 3:
+            return Result(returncode=0, stdout="hermit-channel  stdio  hermit mcp-server\n")
         raise AssertionError(args)
 
     monkeypatch.setattr("hermit_agent.install_flow.subprocess.run", fake_run)
@@ -160,7 +163,32 @@ def test_ensure_hermes_mcp_registered_adds_missing_channel(tmp_path, monkeypatch
     assert calls == [
         ["hermes", "mcp", "list"],
         ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"],
+        ["hermes", "mcp", "list"],
     ]
+
+
+def test_ensure_hermes_mcp_registered_fails_when_add_prompt_is_cancelled(tmp_path, monkeypatch):
+    class Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: "/usr/local/bin/hermes" if name == "hermes" else None)
+
+    def fake_run(args, **kwargs):
+        if args == ["hermes", "mcp", "list"]:
+            return Result(returncode=0, stdout="No MCP servers configured.\n")
+        if args == ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"]:
+            return Result(returncode=0, stdout="Enable all 5 tools? [Y/n/select]: \n  Cancelled.\n")
+        raise AssertionError(args)
+
+    monkeypatch.setattr("hermit_agent.install_flow.subprocess.run", fake_run)
+
+    status = ensure_hermes_mcp_registered(cwd=str(tmp_path))
+
+    assert status.startswith("failed (")
+    assert "Cancelled" in status
 
 
 def test_ensure_hermes_mcp_registered_reuses_existing_channel(tmp_path, monkeypatch):
