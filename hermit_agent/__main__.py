@@ -86,6 +86,7 @@ def _build_install_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-agent-learner", action="store_true", help="Skip agent-learner hook installation/refresh")
     parser.add_argument("--print-hermes-mcp-config", action="store_true", help="Print Hermes Agent MCP registration snippet and exit without changing files")
     parser.add_argument("--fix-hermes-mcp", action="store_true", help="Explicitly register Hermit MCP with Hermes Agent via `hermes mcp add`")
+    parser.add_argument("--test-hermes-mcp", action="store_true", help="Run Hermes Agent's live `hermes mcp test hermit-channel` probe without changing config")
     return parser
 
 
@@ -630,7 +631,9 @@ def main():
             ensure_hermes_mcp_registered,
             format_hermes_mcp_config_snippet,
             format_hermes_mcp_fix_summary,
+            format_hermes_mcp_test_summary,
             format_install_summary,
+            run_hermes_mcp_connection_test,
             run_install,
         )
 
@@ -640,6 +643,9 @@ def main():
             return
         if install_args.fix_hermes_mcp:
             print(format_hermes_mcp_fix_summary(ensure_hermes_mcp_registered(cwd=install_args.cwd)))
+            return
+        if install_args.test_hermes_mcp:
+            print(format_hermes_mcp_test_summary(run_hermes_mcp_connection_test(cwd=install_args.cwd)))
             return
         summary = run_install(
             cwd=install_args.cwd,

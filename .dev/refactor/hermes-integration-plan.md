@@ -136,10 +136,15 @@ Acceptance:
 
 Objective: prove Hermes can invoke Hermit for a small task.
 
-Suggested smoke:
+Status:
+- Implemented a first live MCP wiring smoke as `hermit install --test-hermes-mcp`.
+- The command runs `hermes mcp test hermit-channel` with a bounded timeout and does not mutate Hermes config.
+- It is intentionally separate from `--fix-hermes-mcp` so users can repair registration and probe the live connection as two explicit steps.
+
+Suggested remaining smoke:
 - Isolated temp repo.
 - Isolated `HERMES_HOME` when feasible, or explicit user-scope dry-run when model/auth makes isolation impractical.
-- `hermes mcp test hermit` passes.
+- `hermit install --fix-hermes-mcp` followed by `hermit install --test-hermes-mcp` passes.
 - A tiny Hermit task returns `done` without requiring a real code change.
 
 Acceptance:
