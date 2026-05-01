@@ -199,6 +199,14 @@ def _make_fake_settings_dir():
     return settings_path, tmpdir
 
 
+async def _fake_init_db() -> None:
+    return None
+
+
+async def _fake_create_api_key(api_key: str, user: str, *, grant_all_platforms: bool = False) -> None:
+    return None
+
+
 def test_run_setup_auto_detect_ollama():
     """Full setup flow: auto-detect finds Ollama."""
     settings_path, tmpdir = _make_fake_settings_dir()
@@ -225,9 +233,9 @@ def test_run_setup_auto_detect_ollama():
              ollama_info,
          ]), \
          patch("builtins.input", side_effect=inputs), \
-         patch("hermit_agent.cli_setup.asyncio") as mock_asyncio, \
+         patch("hermit_agent.gateway.db.init_db", _fake_init_db), \
+         patch("hermit_agent.gateway.db.create_api_key", _fake_create_api_key), \
          patch("hermit_agent.cli_setup.DEFAULTS", new={}):
-        mock_asyncio.run.side_effect = lambda coro: None
         run_setup()
 
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -261,9 +269,9 @@ def test_run_setup_explicit_ollama():
              ollama_info,
          ]), \
          patch("builtins.input", side_effect=inputs), \
-         patch("hermit_agent.cli_setup.asyncio") as mock_asyncio, \
+         patch("hermit_agent.gateway.db.init_db", _fake_init_db), \
+         patch("hermit_agent.gateway.db.create_api_key", _fake_create_api_key), \
          patch("hermit_agent.cli_setup.DEFAULTS", new={}):
-        mock_asyncio.run.side_effect = lambda coro: None
         run_setup()
 
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -292,9 +300,9 @@ def test_run_setup_cloud_fallback():
              LocalRuntimeInfo(backend=BACKEND_OLLAMA, available=False),
          ]), \
          patch("builtins.input", side_effect=inputs), \
-         patch("hermit_agent.cli_setup.asyncio") as mock_asyncio, \
+         patch("hermit_agent.gateway.db.init_db", _fake_init_db), \
+         patch("hermit_agent.gateway.db.create_api_key", _fake_create_api_key), \
          patch("hermit_agent.cli_setup.DEFAULTS", new={}):
-        mock_asyncio.run.side_effect = lambda coro: None
         run_setup()
 
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -339,9 +347,9 @@ def test_run_setup_openai_compatible():
 
     with patch("hermit_agent.cli_setup.GLOBAL_SETTINGS_PATH", settings_path), \
          patch("builtins.input", side_effect=inputs), \
-         patch("hermit_agent.cli_setup.asyncio") as mock_asyncio, \
+         patch("hermit_agent.gateway.db.init_db", _fake_init_db), \
+         patch("hermit_agent.gateway.db.create_api_key", _fake_create_api_key), \
          patch("hermit_agent.cli_setup.DEFAULTS", new={}):
-        mock_asyncio.run.side_effect = lambda coro: None
         run_setup()
 
     saved = json.loads(settings_path.read_text(encoding="utf-8"))
