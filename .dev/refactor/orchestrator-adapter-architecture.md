@@ -4,9 +4,16 @@
 
 Hermit currently supports Claude Code and Codex, but several integration details are spread across MCP server code, channel notification code, codex-channels code, install flow, and tests. Adding Hermes Agent should not mean adding a third set of special cases in the core loop.
 
-## Target model
+## Runtime boundary decision
 
-Hermit core should expose an executor task protocol. Orchestrators should be adapters around that protocol.
+Current decision: Hermit's MCP server is the canonical runtime task boundary for Claude Code, Codex, and Hermes Agent. Adapters currently own setup, health, and smoke-check DTO surfaces; they do not own task submission, event delivery, prompt replies, or cancellation.
+
+This keeps the working runtime path honest:
+- orchestrators discover Hermit through setup adapters
+- orchestrators invoke Hermit through MCP tools (`run_task`, `reply_task`, `check_task`, `cancel_task`)
+- prompt/event DTO helpers exist for future extraction and documentation, but do not replace MCP delivery yet
+
+Future model, if a concrete product bug requires adapter-owned runtime delivery:
 
 ```
 Orchestrator
@@ -102,16 +109,20 @@ Implemented scaffold: `hermit_agent/orchestrators/contracts.py` now defines the 
 Use this as the design target for the scaffold and later adapter extraction:
 
 ```python
-class OrchestratorAdapter:
+class OrchestratorSetupAdapter:
     name: str
 
     def install_or_print_instructions(self, *, cwd: str, fix: bool) -> AdapterInstallResult: ...
     def health(self, *, cwd: str) -> AdapterHealth: ...
+
+class OrchestratorRuntimeAdapter(OrchestratorSetupAdapter):
     def submit_task(self, request: TaskRequest) -> TaskHandle: ...
     def emit_event(self, task_id: str, event: TaskEvent) -> None: ...
     def wait_for_reply(self, task_id: str, prompt: InteractivePrompt) -> PromptReply | None: ...
     def cancel(self, task_id: str) -> None: ...
 ```
+
+`OrchestratorAdapter` remains an alias for the future runtime protocol for compatibility, but current Claude/Codex/Hermes wrappers intentionally satisfy only `OrchestratorSetupAdapter`.
 
 DTOs should stay orchestrator-neutral:
 - `TaskRequest`
@@ -123,7 +134,7 @@ DTOs should stay orchestrator-neutral:
 - `AdapterInstallResult`
 
 Current test anchor:
-- `tests/test_orchestrator_contracts.py` verifies immutable DTO shape, stable status/event enum values, and the structural lifecycle shape of `OrchestratorAdapter`.
+- `tests/test_orchestrator_contracts.py` verifies immutable DTO shape, stable status/event enum values, the setup-only protocol shape, and the separate future runtime protocol shape.
 - `tests/test_hermes_orchestrator_adapter.py` verifies `HermesMcpAdapter` maps existing Hermes install, live-smoke, and doctor helpers into `AdapterInstallResult` / `AdapterHealth` without mutating behavior.
 - `tests/test_claude_orchestrator_adapter.py` verifies `ClaudeCodeMcpAdapter` maps existing Claude MCP print/fix/registration-health helpers into `AdapterInstallResult` / `AdapterHealth` without mutating runtime delivery behavior.
 - `tests/test_codex_orchestrator_adapter.py` verifies `CodexAdapter` maps existing codex-channels, Codex marketplace, Codex MCP, and legacy reply-hook helpers into `AdapterInstallResult` / `AdapterHealth` without mutating runtime delivery behavior.
@@ -131,8 +142,8 @@ Current test anchor:
 - `tests/test_orchestrator_event_mapping.py` verifies current Gateway SSE events, channel actions, and task status payloads can map into neutral `TaskEvent` DTOs without rewiring delivery behavior.
 
 Next extraction candidates:
-- start equivalent Claude/Codex install and health wrappers after the Hermes wrapper shape proves stable
 - keep MCP server as the canonical runtime boundary unless a later smoke proves an adapter-owned runtime path is safer
+- only implement `OrchestratorRuntimeAdapter` methods when a specific orchestrator needs a non-MCP lifecycle path
 
 ## Non-goals
 

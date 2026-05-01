@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import pytest
-
 from hermit_agent.orchestrators import (
     AdapterHealthStatus,
     AdapterInstallStatus,
     CodexAdapter,
-    InteractivePrompt,
-    TaskEvent,
-    TaskEventKind,
-    TaskRequest,
+    OrchestratorRuntimeAdapter,
+    OrchestratorSetupAdapter,
 )
 
 
@@ -24,6 +20,8 @@ def test_codex_adapter_print_only_returns_actionable_skipped_result_without_inst
 
     result = CodexAdapter().install_or_print_instructions(cwd="/repo", fix=False)
 
+    assert isinstance(CodexAdapter(), OrchestratorSetupAdapter)
+    assert not isinstance(CodexAdapter(), OrchestratorRuntimeAdapter)
     assert result.name == "codex"
     assert result.status == AdapterInstallStatus.SKIPPED
     assert result.changed is False
@@ -103,14 +101,3 @@ def test_codex_adapter_health_uses_runtime_version(monkeypatch):
     assert "missing" in missing.message
 
 
-def test_codex_adapter_lifecycle_methods_are_explicitly_unsupported():
-    adapter = CodexAdapter()
-
-    with pytest.raises(NotImplementedError, match="existing Codex channel"):
-        adapter.submit_task(TaskRequest(task="do it", cwd="/repo"))
-    with pytest.raises(NotImplementedError, match="existing Codex channel"):
-        adapter.emit_event("task-1", TaskEvent(task_id="task-1", kind=TaskEventKind.RUNNING))
-    with pytest.raises(NotImplementedError, match="existing Codex channel"):
-        adapter.wait_for_reply("task-1", InteractivePrompt(task_id="task-1", question="Continue?"))
-    with pytest.raises(NotImplementedError, match="existing Codex channel"):
-        adapter.cancel("task-1")

@@ -65,21 +65,23 @@ Keep the existing working runtime paths while extracting a neutral adapter bound
 
 Current implemented adapter pieces:
 - `hermit_agent/orchestrators/contracts.py`
-  - neutral DTO/protocol definitions
+  - neutral DTO definitions
+  - `OrchestratorSetupAdapter` for install/health surfaces
+  - `OrchestratorRuntimeAdapter` reserved for future non-MCP lifecycle owners
 - `hermit_agent/orchestrators/hermes.py`
   - thin Hermes setup/doctor/live-smoke wrapper
-  - runtime lifecycle methods intentionally raise `NotImplementedError`
+- `hermit_agent/orchestrators/claude.py`
+  - thin Claude setup/health wrapper
+- `hermit_agent/orchestrators/codex.py`
+  - thin Codex setup/health wrapper
 - `hermit_agent/orchestrators/prompts.py`
   - runtime `InteractivePrompt` ↔ adapter `InteractivePrompt` mapping
   - `PromptReply` helper
 
-Important current gap:
-- `HermesMcpAdapter.submit_task()` is not implemented.
-- `HermesMcpAdapter.emit_event()` is not implemented.
-- `HermesMcpAdapter.wait_for_reply()` is not implemented.
-- `HermesMcpAdapter.cancel()` is not implemented.
-
-This is acceptable only if the canonical Hermes runtime remains the existing MCP server path and the adapter is documented as install/doctor-only. If the target architecture requires all orchestrators behind `OrchestratorAdapter`, later PRs must wire those lifecycle methods to the MCP/gateway task proxy.
+Current runtime decision:
+- Hermit's MCP server remains the canonical runtime task boundary.
+- Claude Code, Codex, and Hermes Agent invoke Hermit through MCP tools (`run_task`, `reply_task`, `check_task`, `cancel_task`).
+- Adapter wrappers currently describe setup/health/smoke only; they do not imply adapter-owned task submission or event delivery.
 
 ## PR sequence
 

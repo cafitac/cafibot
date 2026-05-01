@@ -80,7 +80,7 @@ Acceptance:
 
 ### R2.1 Define orchestrator-neutral contracts
 
-Status: first scaffold implemented in `hermit_agent/orchestrators/contracts.py`; behavior remains on the existing Claude/Codex/Hermes paths until R2.2 extraction slices.
+Status: `hermit_agent/orchestrators/contracts.py` now separates `OrchestratorSetupAdapter` from the future `OrchestratorRuntimeAdapter`. `OrchestratorAdapter` remains a compatibility alias for the runtime protocol, while current Claude/Codex/Hermes wrappers satisfy only the setup/health surface. Behavior remains on the existing MCP server path.
 
 Target surfaces:
 - task submission

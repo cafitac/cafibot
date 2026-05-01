@@ -12,11 +12,6 @@ from .contracts import (
     AdapterHealthStatus,
     AdapterInstallResult,
     AdapterInstallStatus,
-    InteractivePrompt,
-    PromptReply,
-    TaskEvent,
-    TaskHandle,
-    TaskRequest,
 )
 from ..doctor import DiagCheck, DiagStatus, _check_hermes_mcp as check_hermes_mcp
 from ..install_flow import (
@@ -57,19 +52,6 @@ class HermesMcpAdapter:
         else:
             health_status = AdapterHealthStatus.FAIL
         return AdapterHealth(name=self.name, status=health_status, message=status)
-
-    def submit_task(self, request: TaskRequest) -> TaskHandle:
-        raise NotImplementedError("Hermes task submission still uses the MCP server path directly")
-
-    def emit_event(self, task_id: str, event: TaskEvent) -> None:
-        raise NotImplementedError("Hermes event delivery still uses the MCP server path directly")
-
-    def wait_for_reply(self, task_id: str, prompt: InteractivePrompt) -> PromptReply | None:
-        raise NotImplementedError("Hermes reply delivery still uses the MCP server path directly")
-
-    def cancel(self, task_id: str) -> None:
-        raise NotImplementedError("Hermes cancellation still uses the MCP server path directly")
-
 
 def _install_result_from_status(status: str) -> AdapterInstallResult:
     if status == "registered":

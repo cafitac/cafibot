@@ -9,6 +9,8 @@ from hermit_agent.orchestrators import (
     AdapterHealthStatus,
     AdapterInstallResult,
     AdapterInstallStatus,
+    OrchestratorRuntimeAdapter,
+    OrchestratorSetupAdapter,
     InteractivePrompt,
     OrchestratorAdapter,
     PromptReply,
@@ -82,8 +84,34 @@ def test_contract_dtos_have_stable_status_and_event_values():
     assert install.changed is False
 
 
-def test_adapter_protocol_supports_core_lifecycle_shape():
-    class RecordingAdapter:
+def test_setup_adapter_protocol_is_separate_from_runtime_lifecycle_shape():
+    class RecordingSetupAdapter:
+        name = "recording"
+
+        def install_or_print_instructions(self, *, cwd: str, fix: bool) -> AdapterInstallResult:
+            return AdapterInstallResult(
+                name=self.name,
+                status=AdapterInstallStatus.REGISTERED if fix else AdapterInstallStatus.PRINTED,
+                message=f"cwd={cwd}",
+                changed=fix,
+            )
+
+        def health(self, *, cwd: str) -> AdapterHealth:
+            return AdapterHealth(name=self.name, status=AdapterHealthStatus.PASS, message=cwd)
+
+    adapter: OrchestratorSetupAdapter = RecordingSetupAdapter()
+
+    install = adapter.install_or_print_instructions(cwd="/repo", fix=True)
+    health = adapter.health(cwd="/repo")
+
+    assert install.status == AdapterInstallStatus.REGISTERED
+    assert health.status == AdapterHealthStatus.PASS
+    assert isinstance(adapter, OrchestratorSetupAdapter)
+    assert not isinstance(adapter, OrchestratorRuntimeAdapter)
+
+
+def test_runtime_adapter_protocol_extends_setup_with_lifecycle_shape():
+    class RecordingRuntimeAdapter:
         name = "recording"
 
         def __init__(self) -> None:
@@ -114,7 +142,7 @@ def test_adapter_protocol_supports_core_lifecycle_shape():
         def cancel(self, task_id: str) -> None:
             self.cancelled.append(task_id)
 
-    adapter: OrchestratorAdapter = RecordingAdapter()
+    adapter: OrchestratorRuntimeAdapter = RecordingRuntimeAdapter()
     request = TaskRequest(task="Run tests", cwd="/repo")
 
     install = adapter.install_or_print_instructions(cwd="/repo", fix=True)
@@ -130,5 +158,7 @@ def test_adapter_protocol_supports_core_lifecycle_shape():
     assert health.status == AdapterHealthStatus.PASS
     assert handle.url == "/repo"
     assert reply == PromptReply(task_id="task-1", answer="yes", approved=True)
+    assert isinstance(adapter, OrchestratorSetupAdapter)
+    assert isinstance(adapter, OrchestratorRuntimeAdapter)
     assert isinstance(adapter, OrchestratorAdapter)
     assert adapter.cancelled == ["task-1"]

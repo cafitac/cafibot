@@ -11,11 +11,6 @@ from .contracts import (
     AdapterHealthStatus,
     AdapterInstallResult,
     AdapterInstallStatus,
-    InteractivePrompt,
-    PromptReply,
-    TaskEvent,
-    TaskHandle,
-    TaskRequest,
 )
 from ..install_flow import (
     ensure_codex_channels_ready,
@@ -102,19 +97,6 @@ class CodexAdapter:
             status=AdapterHealthStatus.WARN,
             message="codex-channels runtime missing — run `hermit install` or use fix=True adapter setup",
         )
-
-    def submit_task(self, request: TaskRequest) -> TaskHandle:
-        raise NotImplementedError("Codex task submission still uses the existing Codex channel/MCP runtime paths")
-
-    def emit_event(self, task_id: str, event: TaskEvent) -> None:
-        raise NotImplementedError("Codex event delivery still uses the existing Codex channel/MCP runtime paths")
-
-    def wait_for_reply(self, task_id: str, prompt: InteractivePrompt) -> PromptReply | None:
-        raise NotImplementedError("Codex reply delivery still uses the existing Codex channel/MCP runtime paths")
-
-    def cancel(self, task_id: str) -> None:
-        raise NotImplementedError("Codex cancellation still uses the existing Codex channel/MCP runtime paths")
-
 
 def _codex_statuses_changed(runtime_status: str, marketplace_status: str, mcp_status: str, hook_status: str) -> bool:
     return any(

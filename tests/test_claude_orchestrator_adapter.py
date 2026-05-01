@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import pytest
-
 from hermit_agent.orchestrators import (
     AdapterHealthStatus,
     AdapterInstallStatus,
     ClaudeCodeMcpAdapter,
-    InteractivePrompt,
-    TaskEvent,
-    TaskEventKind,
-    TaskRequest,
+    OrchestratorRuntimeAdapter,
+    OrchestratorSetupAdapter,
 )
 
 
@@ -24,6 +20,8 @@ def test_claude_adapter_print_only_returns_instructions_without_registering(monk
 
     result = ClaudeCodeMcpAdapter().install_or_print_instructions(cwd="/repo", fix=False)
 
+    assert isinstance(ClaudeCodeMcpAdapter(), OrchestratorSetupAdapter)
+    assert not isinstance(ClaudeCodeMcpAdapter(), OrchestratorRuntimeAdapter)
     assert result.name == "claude-code"
     assert result.status == AdapterInstallStatus.PRINTED
     assert result.changed is False
@@ -71,14 +69,3 @@ def test_claude_adapter_health_maps_registration_status(monkeypatch):
     assert "invalid" in invalid.message
 
 
-def test_claude_adapter_lifecycle_methods_are_explicitly_unsupported():
-    adapter = ClaudeCodeMcpAdapter()
-
-    with pytest.raises(NotImplementedError, match="MCP server path"):
-        adapter.submit_task(TaskRequest(task="do it", cwd="/repo"))
-    with pytest.raises(NotImplementedError, match="MCP server path"):
-        adapter.emit_event("task-1", TaskEvent(task_id="task-1", kind=TaskEventKind.RUNNING))
-    with pytest.raises(NotImplementedError, match="MCP server path"):
-        adapter.wait_for_reply("task-1", InteractivePrompt(task_id="task-1", question="Continue?"))
-    with pytest.raises(NotImplementedError, match="MCP server path"):
-        adapter.cancel("task-1")
