@@ -142,6 +142,7 @@ def test_hermes_mcp_registered_passes(monkeypatch):
         chk = next(c for c in report.checks if c.name == "Hermes MCP")
         assert chk.status == DiagStatus.PASS
         assert "hermit-channel registered" in chk.message
+        assert "Hermes target: " + str(hermes_home) in report.format()
         assert calls == [{"args": ["hermes", "mcp", "list", "--json"], "env": {**__import__("os").environ, "HERMES_HOME": str(hermes_home)}}]
 
 
