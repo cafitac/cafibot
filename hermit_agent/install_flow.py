@@ -334,14 +334,35 @@ def ensure_hermes_mcp_registered(*, cwd: str) -> str:
             cwd=cwd,
             capture_output=True,
             text=True,
+            input="y\n",
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"failed ({exc})"
 
-    if proc.returncode != 0:
-        message = proc.stderr.strip() or proc.stdout.strip() or "failed to register Hermes MCP"
-        return f"failed ({message})"
+    message = "\n".join(part.strip() for part in (proc.stdout, proc.stderr) if part.strip())
+    if proc.returncode != 0 or _hermes_mcp_test_output_indicates_failure(message) or "cancelled" in message.casefold():
+        return f"failed ({message or 'failed to register Hermes MCP'})"
+
+    try:
+        updated = subprocess.run(
+            ["hermes", "mcp", "list"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"failed ({exc})"
+
+    updated_message = "\n".join(part.strip() for part in (updated.stdout, updated.stderr) if part.strip())
+    if updated.returncode != 0 or not _hermes_mcp_list_contains_expected_entry(
+        updated.stdout,
+        expected_command=desired_command,
+        expected_args=desired_args,
+    ):
+        return f"failed ({updated_message or 'Hermes MCP registration was not persisted'})"
+
     return "registered"
 
 
