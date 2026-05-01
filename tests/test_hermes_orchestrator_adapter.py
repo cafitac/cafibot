@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from hermit_agent.doctor import DiagCheck, DiagStatus
-from hermit_agent.orchestrators import AdapterHealthStatus, AdapterInstallStatus, OrchestratorAdapter
+from hermit_agent.orchestrators import AdapterHealthStatus, AdapterInstallStatus, OrchestratorRuntimeAdapter, OrchestratorSetupAdapter
 from hermit_agent.orchestrators.hermes import HermesMcpAdapter
 
 
@@ -18,9 +18,11 @@ def test_hermes_adapter_prints_instructions_without_mutating(monkeypatch):
         lambda **kwargs: (_ for _ in ()).throw(AssertionError("print-only path must not mutate Hermes config")),
     )
 
-    adapter: OrchestratorAdapter = HermesMcpAdapter()
+    adapter: OrchestratorSetupAdapter = HermesMcpAdapter()
     result = adapter.install_or_print_instructions(cwd="/repo", fix=False)
 
+    assert isinstance(adapter, OrchestratorSetupAdapter)
+    assert not isinstance(adapter, OrchestratorRuntimeAdapter)
     assert result.name == "hermes"
     assert result.status == AdapterInstallStatus.PRINTED
     assert result.changed is False

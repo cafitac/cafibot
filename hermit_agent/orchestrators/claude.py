@@ -11,11 +11,6 @@ from .contracts import (
     AdapterHealthStatus,
     AdapterInstallResult,
     AdapterInstallStatus,
-    InteractivePrompt,
-    PromptReply,
-    TaskEvent,
-    TaskHandle,
-    TaskRequest,
 )
 from ..install_flow import inspect_claude_mcp_registration, register_claude_mcp, resolve_hermit_mcp_stdio_entry
 
@@ -57,19 +52,6 @@ class ClaudeCodeMcpAdapter:
     def health(self, *, cwd: str) -> AdapterHealth:
         status = inspect_claude_mcp_registration(entry=resolve_hermit_mcp_stdio_entry(cwd=cwd))
         return _health_from_registration_status(status)
-
-    def submit_task(self, request: TaskRequest) -> TaskHandle:
-        raise NotImplementedError("Claude Code task submission still uses the MCP server path directly")
-
-    def emit_event(self, task_id: str, event: TaskEvent) -> None:
-        raise NotImplementedError("Claude Code event delivery still uses the MCP server path directly")
-
-    def wait_for_reply(self, task_id: str, prompt: InteractivePrompt) -> PromptReply | None:
-        raise NotImplementedError("Claude Code reply delivery still uses the MCP server path directly")
-
-    def cancel(self, task_id: str) -> None:
-        raise NotImplementedError("Claude Code cancellation still uses the MCP server path directly")
-
 
 def _install_result_from_status(status: str, *, path: object, backup: object | None) -> AdapterInstallResult:
     if status == "registered":

@@ -120,8 +120,13 @@ class AdapterInstallResult:
 
 
 @runtime_checkable
-class OrchestratorAdapter(Protocol):
-    """Minimal lifecycle contract for higher-level Hermit orchestrators."""
+class OrchestratorSetupAdapter(Protocol):
+    """Setup/health contract for optional higher-level Hermit orchestrators.
+
+    The MCP server is the canonical runtime task boundary today. Setup adapters
+    expose registration and diagnostics without implying that they own task
+    submission, event delivery, prompt replies, or cancellation.
+    """
 
     name: str
 
@@ -130,6 +135,17 @@ class OrchestratorAdapter(Protocol):
 
     def health(self, *, cwd: str) -> AdapterHealth:
         """Return read-only adapter health for diagnostics/doctor output."""
+
+
+@runtime_checkable
+class OrchestratorRuntimeAdapter(OrchestratorSetupAdapter, Protocol):
+    """Future adapter-owned task lifecycle contract.
+
+    Current Claude Code, Codex, and Hermes integrations use Hermit's MCP server
+    tools (`run_task`, `reply_task`, `check_task`, `cancel_task`) as the stable
+    runtime surface. Implement this protocol only for a future orchestrator that
+    truly owns those lifecycle operations outside the MCP tool boundary.
+    """
 
     def submit_task(self, request: TaskRequest) -> TaskHandle:
         """Submit a task to Hermit and return a stable task handle."""
@@ -142,3 +158,6 @@ class OrchestratorAdapter(Protocol):
 
     def cancel(self, task_id: str) -> None:
         """Cancel an in-flight task or clear adapter-side task state."""
+
+
+OrchestratorAdapter = OrchestratorRuntimeAdapter

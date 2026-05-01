@@ -47,6 +47,7 @@
 - Added adapter prompt mapping helpers that round-trip the current runtime `InteractivePrompt` shape through the neutral `InteractivePrompt` / `PromptReply` DTOs without changing interactive delivery behavior.
 - Added pure task event mapping helpers that convert existing Gateway SSE events, channel actions, and task status payloads into neutral `TaskEvent` DTOs without changing MCP/channel delivery behavior.
 - Added thin Claude Code and Codex adapter wrappers that map existing setup and health helpers onto the shared adapter DTOs without changing the current MCP/channel runtime delivery paths.
+- Split the adapter contract into `OrchestratorSetupAdapter` and future `OrchestratorRuntimeAdapter` protocols so current Claude/Codex/Hermes wrappers no longer imply they own task submission or prompt/event delivery while Hermit's MCP server remains the canonical runtime boundary.
 - Started tracking the long-term refactor roadmap under `.dev/refactor/**` while leaving other `.dev/*` scratch files ignored.
 - Removed warning-producing test mocks for setup coroutines so the suite no longer emits unawaited `init_db` / `create_api_key` runtime warnings.
 - Aligned contributor and harness docs on `.venv/bin/python -m pytest tests/` and added a repo hygiene regression so stale `.venv/bin/pytest` shebangs are not reintroduced as the documented path.
