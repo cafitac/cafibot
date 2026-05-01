@@ -300,12 +300,21 @@ def _hermes_mcp_list_contains_expected_entry(output: str, *, expected_command: s
     return all(arg in normalized for arg in expected_args)
 
 
-def ensure_hermes_mcp_registered(*, cwd: str) -> str:
+def _hermes_cli_env(*, hermes_home: str | None) -> dict[str, str] | None:
+    if not hermes_home:
+        return None
+    env = dict(os.environ)
+    env["HERMES_HOME"] = hermes_home
+    return env
+
+
+def ensure_hermes_mcp_registered(*, cwd: str, hermes_home: str | None = None) -> str:
     """Explicitly register Hermit's MCP server in Hermes Agent via the Hermes CLI."""
     if shutil.which("hermes") is None:
         return "missing-hermes-cli"
 
     desired_entry = resolve_hermit_mcp_stdio_entry(cwd=cwd)
+    hermes_env = _hermes_cli_env(hermes_home=hermes_home)
     desired_command = str(desired_entry["command"])
     raw_args = desired_entry.get("args", [])
     desired_args = [str(arg) for arg in raw_args] if isinstance(raw_args, list) else []
@@ -314,6 +323,7 @@ def ensure_hermes_mcp_registered(*, cwd: str) -> str:
         current = subprocess.run(
             ["hermes", "mcp", "list"],
             cwd=cwd,
+            env=hermes_env,
             capture_output=True,
             text=True,
             timeout=30,
@@ -332,6 +342,7 @@ def ensure_hermes_mcp_registered(*, cwd: str) -> str:
         proc = subprocess.run(
             ["hermes", "mcp", "add", "hermit-channel", "--command", desired_command, "--args", *desired_args],
             cwd=cwd,
+            env=hermes_env,
             capture_output=True,
             text=True,
             input="y\n",
@@ -348,6 +359,7 @@ def ensure_hermes_mcp_registered(*, cwd: str) -> str:
         updated = subprocess.run(
             ["hermes", "mcp", "list"],
             cwd=cwd,
+            env=hermes_env,
             capture_output=True,
             text=True,
             timeout=30,
@@ -393,7 +405,7 @@ def _hermes_mcp_test_output_indicates_failure(output: str) -> bool:
     return any(marker in lowered for marker in failure_markers)
 
 
-def run_hermes_mcp_connection_test(*, cwd: str) -> str:
+def run_hermes_mcp_connection_test(*, cwd: str, hermes_home: str | None = None) -> str:
     """Run Hermes Agent's live MCP probe for the Hermit MCP channel.
 
     This is an explicit smoke check only: it does not add, remove, or edit any
@@ -406,6 +418,7 @@ def run_hermes_mcp_connection_test(*, cwd: str) -> str:
         proc = subprocess.run(
             ["hermes", "mcp", "test", "hermit-channel"],
             cwd=cwd,
+            env=_hermes_cli_env(hermes_home=hermes_home),
             capture_output=True,
             text=True,
             timeout=30,
@@ -811,6 +824,7 @@ def run_install(
     skip_mcp_register: bool = False,
     skip_codex: bool = False,
     skip_agent_learner: bool = False,
+    hermes_home: str | None = None,
 ) -> InstallSummary:
     settings_path = init_settings_file(global_=True)
     summary = InstallSummary(settings_path=str(settings_path))
