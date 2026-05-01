@@ -352,12 +352,55 @@ def format_hermes_mcp_fix_summary(status: str) -> str:
         "Next:",
     ]
     if status in {"registered", "unchanged"}:
-        lines.append("1. Run `hermes mcp test hermit-channel` to verify the live MCP connection.")
+        lines.append("1. Run `hermit install --test-hermes-mcp` to verify the live MCP connection.")
         lines.append("2. Restart Hermes Agent sessions that should use Hermit as an MCP executor.")
     elif status == "missing-hermes-cli":
         lines.append("1. Install or update Hermes Agent, then rerun `hermit install --fix-hermes-mcp`.")
     else:
         lines.append("1. Inspect `hermes mcp list` and rerun `hermit install --print-hermes-mcp-config` for the manual registration command.")
+    return "\n".join(lines)
+
+
+def run_hermes_mcp_connection_test(*, cwd: str) -> str:
+    """Run Hermes Agent's live MCP probe for the Hermit MCP channel.
+
+    This is an explicit smoke check only: it does not add, remove, or edit any
+    Hermes MCP configuration.
+    """
+    if shutil.which("hermes") is None:
+        return "missing-hermes-cli"
+
+    try:
+        proc = subprocess.run(
+            ["hermes", "mcp", "test", "hermit-channel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"failed ({exc})"
+
+    if proc.returncode == 0:
+        return "passed"
+    message = proc.stderr.strip() or proc.stdout.strip() or "Hermes MCP test failed"
+    return f"failed ({message})"
+
+
+def format_hermes_mcp_test_summary(status: str) -> str:
+    lines = [
+        f"Hermes MCP live test: {status}",
+        "",
+        "Next:",
+    ]
+    if status == "passed":
+        lines.append("1. Hermit MCP is ready for Hermes Agent sessions that load the hermit-channel server.")
+        lines.append("2. Restart existing Hermes Agent sessions if they were already running before registration.")
+    elif status == "missing-hermes-cli":
+        lines.append("1. Install or update Hermes Agent, then rerun `hermit install --test-hermes-mcp`.")
+    else:
+        lines.append("1. Run `hermit install --fix-hermes-mcp` to register or repair hermit-channel.")
+        lines.append("2. Re-run `hermit install --test-hermes-mcp` after the fix.")
     return "\n".join(lines)
 
 

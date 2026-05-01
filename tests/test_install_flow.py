@@ -14,8 +14,10 @@ from hermit_agent.install_flow import (
     ensure_gateway_api_key,
     ensure_gateway_running,
     ensure_hermes_mcp_registered,
+    run_hermes_mcp_connection_test,
     format_hermes_mcp_config_snippet,
     format_hermes_mcp_fix_summary,
+    format_hermes_mcp_test_summary,
     format_install_summary,
     format_startup_heal_summary,
     get_codex_runtime_version,
@@ -192,7 +194,55 @@ def test_format_hermes_mcp_fix_summary_reports_next_steps():
     text = format_hermes_mcp_fix_summary("registered")
 
     assert "Hermes MCP registration: registered" in text
-    assert "hermes mcp test hermit-channel" in text
+    assert "hermit install --test-hermes-mcp" in text
+
+
+def test_run_hermes_mcp_connection_test_runs_bounded_live_probe(tmp_path, monkeypatch):
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = "Connected to hermit-channel\n"
+        stderr = ""
+
+    monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: "/usr/local/bin/hermes" if name == "hermes" else None)
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        assert kwargs["cwd"] == str(tmp_path)
+        assert kwargs["timeout"] == 30
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        return Result()
+
+    monkeypatch.setattr("hermit_agent.install_flow.subprocess.run", fake_run)
+
+    status = run_hermes_mcp_connection_test(cwd=str(tmp_path))
+
+    assert status == "passed"
+    assert calls == [["hermes", "mcp", "test", "hermit-channel"]]
+
+
+def test_run_hermes_mcp_connection_test_reports_cli_and_probe_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: None)
+    assert run_hermes_mcp_connection_test(cwd=str(tmp_path)) == "missing-hermes-cli"
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "server not found"
+
+    monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: "/usr/local/bin/hermes" if name == "hermes" else None)
+    monkeypatch.setattr("hermit_agent.install_flow.subprocess.run", lambda *args, **kwargs: Result())
+
+    assert run_hermes_mcp_connection_test(cwd=str(tmp_path)) == "failed (server not found)"
+
+
+def test_format_hermes_mcp_test_summary_keeps_fix_path_actionable():
+    text = format_hermes_mcp_test_summary("failed (server not found)")
+
+    assert "Hermes MCP live test: failed (server not found)" in text
+    assert "hermit install --fix-hermes-mcp" in text
 
 
 def test_ensure_codex_mcp_registered_replaces_mismatched_entry(tmp_path, monkeypatch):
