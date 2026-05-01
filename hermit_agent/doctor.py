@@ -32,6 +32,7 @@ class DiagCheck:
 @dataclass
 class DiagReport:
     checks: list[DiagCheck] = field(default_factory=list)
+    hermes_home: str | None = None
 
     @property
     def overall(self) -> DiagStatus:
@@ -44,6 +45,8 @@ class DiagReport:
     def format(self) -> str:
         icon = {DiagStatus.PASS: "✅", DiagStatus.WARN: "⚠️ ", DiagStatus.FAIL: "❌"}
         lines = [f"HermitAgent Doctor — overall: {icon[self.overall]} {self.overall.value}", ""]
+        if self.hermes_home:
+            lines.extend([f"Hermes target: {self.hermes_home}", ""])
         for c in self.checks:
             lines.append(f"{icon[c.status]} {c.name}: {c.message}")
         return "\n".join(lines)
@@ -354,7 +357,7 @@ def run_diagnostics(cwd: str | None = None, home: str | None = None, hermes_home
         _check_agent_learner(home),
         _check_hermes_mcp(cwd, hermes_home=hermes_home),
     ]
-    return DiagReport(checks=checks)
+    return DiagReport(checks=checks, hermes_home=hermes_home)
 
 
 def format_doctor_fix_summary(*, cwd: str, hermes_home: str | None = None) -> str:

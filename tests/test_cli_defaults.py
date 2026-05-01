@@ -267,13 +267,15 @@ def test_main_dispatches_doctor(monkeypatch, capsys):
 
     class DummyReport:
         def format(self):
-            return "HermitAgent Doctor — overall: PASS"
+            return "HermitAgent Doctor — overall: PASS\n\nHermes target: /tmp/hermes-home"
 
     monkeypatch.setattr("hermit_agent.doctor.run_diagnostics", lambda **kwargs: seen.append(kwargs) or DummyReport())
 
     main_mod.main()
 
-    assert "HermitAgent Doctor — overall: PASS" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "HermitAgent Doctor — overall: PASS" in out
+    assert "Hermes target: /tmp/hermes-home" in out
     assert seen == [{"cwd": "/tmp/demo", "hermes_home": "/tmp/hermes-home"}]
 
 
