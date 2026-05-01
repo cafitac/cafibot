@@ -65,7 +65,14 @@ Run the bounded live probe:
 hermit install --test-hermes-mcp
 ```
 
-Under the hood this executes Hermes Agent's live MCP check for `hermit-channel` without mutating config.
+If you want an isolated Hermes config during registration or smoke, point Hermit at a separate home:
+
+```bash
+hermit install --fix-hermes-mcp --hermes-home /tmp/hermes-home
+hermit install --test-hermes-mcp --hermes-home /tmp/hermes-home
+```
+
+Under the hood this executes Hermes Agent's live MCP check for `hermit-channel` without mutating config beyond the explicit `--fix-hermes-mcp` path.
 
 You can also inspect Hermes directly:
 

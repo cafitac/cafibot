@@ -134,7 +134,7 @@ def test_format_hermes_mcp_config_snippet_is_print_only_and_uses_stable_stdio_en
 
 
 def test_ensure_hermes_mcp_registered_adds_missing_channel(tmp_path, monkeypatch):
-    calls: list[list[str]] = []
+    calls: list[dict[str, object]] = []
 
     class Result:
         def __init__(self, returncode=0, stdout="", stderr=""):
@@ -145,7 +145,7 @@ def test_ensure_hermes_mcp_registered_adds_missing_channel(tmp_path, monkeypatch
     monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: "/usr/local/bin/hermes" if name == "hermes" else None)
 
     def fake_run(args, **kwargs):
-        calls.append(args)
+        calls.append({"args": args, "env": kwargs.get("env")})
         if args == ["hermes", "mcp", "list"] and len(calls) == 1:
             return Result(returncode=0, stdout="No MCP servers configured.\n")
         if args == ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"]:
@@ -161,9 +161,43 @@ def test_ensure_hermes_mcp_registered_adds_missing_channel(tmp_path, monkeypatch
 
     assert status == "registered"
     assert calls == [
-        ["hermes", "mcp", "list"],
-        ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"],
-        ["hermes", "mcp", "list"],
+        {"args": ["hermes", "mcp", "list"], "env": None},
+        {"args": ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"], "env": None},
+        {"args": ["hermes", "mcp", "list"], "env": None},
+    ]
+
+
+def test_ensure_hermes_mcp_registered_can_target_isolated_hermes_home(tmp_path, monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: "/usr/local/bin/hermes" if name == "hermes" else None)
+
+    def fake_run(args, **kwargs):
+        calls.append({"args": args, "env": kwargs.get("env")})
+        if args == ["hermes", "mcp", "list"] and len(calls) == 1:
+            return Result(returncode=0, stdout="No MCP servers configured.\n")
+        if args == ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"]:
+            return Result(returncode=0, stdout="Connected! Found 5 tool(s) from 'hermit-channel'\n")
+        if args == ["hermes", "mcp", "list"] and len(calls) == 3:
+            return Result(returncode=0, stdout="hermit-channel  stdio  hermit mcp-server\n")
+        raise AssertionError(args)
+
+    monkeypatch.setattr("hermit_agent.install_flow.subprocess.run", fake_run)
+
+    hermes_home = tmp_path / "isolated-hermes-home"
+    status = ensure_hermes_mcp_registered(cwd=str(tmp_path), hermes_home=str(hermes_home))
+
+    assert status == "registered"
+    assert calls == [
+        {"args": ["hermes", "mcp", "list"], "env": {**__import__("os").environ, "HERMES_HOME": str(hermes_home)}},
+        {"args": ["hermes", "mcp", "add", "hermit-channel", "--command", "hermit", "--args", "mcp-server"], "env": {**__import__("os").environ, "HERMES_HOME": str(hermes_home)}},
+        {"args": ["hermes", "mcp", "list"], "env": {**__import__("os").environ, "HERMES_HOME": str(hermes_home)}},
     ]
 
 
@@ -226,7 +260,7 @@ def test_format_hermes_mcp_fix_summary_reports_next_steps():
 
 
 def test_run_hermes_mcp_connection_test_runs_bounded_live_probe(tmp_path, monkeypatch):
-    calls: list[list[str]] = []
+    calls: list[dict[str, object]] = []
 
     class Result:
         returncode = 0
@@ -236,11 +270,7 @@ def test_run_hermes_mcp_connection_test_runs_bounded_live_probe(tmp_path, monkey
     monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: "/usr/local/bin/hermes" if name == "hermes" else None)
 
     def fake_run(args, **kwargs):
-        calls.append(args)
-        assert kwargs["cwd"] == str(tmp_path)
-        assert kwargs["timeout"] == 30
-        assert kwargs["capture_output"] is True
-        assert kwargs["text"] is True
+        calls.append({"args": args, "cwd": kwargs["cwd"], "timeout": kwargs["timeout"], "capture_output": kwargs["capture_output"], "text": kwargs["text"], "env": kwargs.get("env")})
         return Result()
 
     monkeypatch.setattr("hermit_agent.install_flow.subprocess.run", fake_run)
@@ -248,7 +278,30 @@ def test_run_hermes_mcp_connection_test_runs_bounded_live_probe(tmp_path, monkey
     status = run_hermes_mcp_connection_test(cwd=str(tmp_path))
 
     assert status == "passed"
-    assert calls == [["hermes", "mcp", "test", "hermit-channel"]]
+    assert calls == [{"args": ["hermes", "mcp", "test", "hermit-channel"], "cwd": str(tmp_path), "timeout": 30, "capture_output": True, "text": True, "env": None}]
+
+
+def test_run_hermes_mcp_connection_test_can_target_isolated_hermes_home(tmp_path, monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class Result:
+        returncode = 0
+        stdout = "Connected to hermit-channel\n"
+        stderr = ""
+
+    monkeypatch.setattr("hermit_agent.install_flow.shutil.which", lambda name: "/usr/local/bin/hermes" if name == "hermes" else None)
+
+    def fake_run(args, **kwargs):
+        calls.append({"args": args, "env": kwargs.get("env")})
+        return Result()
+
+    monkeypatch.setattr("hermit_agent.install_flow.subprocess.run", fake_run)
+
+    hermes_home = tmp_path / "isolated-hermes-home"
+    status = run_hermes_mcp_connection_test(cwd=str(tmp_path), hermes_home=str(hermes_home))
+
+    assert status == "passed"
+    assert calls == [{"args": ["hermes", "mcp", "test", "hermit-channel"], "env": {**__import__("os").environ, "HERMES_HOME": str(hermes_home)}}]
 
 
 def test_run_hermes_mcp_connection_test_reports_cli_and_probe_failures(tmp_path, monkeypatch):

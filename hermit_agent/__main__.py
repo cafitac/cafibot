@@ -78,6 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _build_install_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guided Hermit install/setup flow")
     parser.add_argument("--cwd", default=os.getcwd(), help="Working directory")
+    parser.add_argument("--hermes-home", default=None, help="Optional Hermes Agent home directory for isolated MCP registration/smoke")
     parser.add_argument("--codex-command", default="codex", help="Codex CLI command")
     parser.add_argument("--codex-scope", choices=["workspace", "user"], default="user", help="Codex plugin bootstrap scope")
     parser.add_argument("--yes", action="store_true", help="Accept recommended installer choices non-interactively")
@@ -642,10 +643,10 @@ def main():
             print(format_hermes_mcp_config_snippet(cwd=install_args.cwd))
             return
         if install_args.fix_hermes_mcp:
-            print(format_hermes_mcp_fix_summary(ensure_hermes_mcp_registered(cwd=install_args.cwd)))
+            print(format_hermes_mcp_fix_summary(ensure_hermes_mcp_registered(cwd=install_args.cwd, hermes_home=install_args.hermes_home)))
             return
         if install_args.test_hermes_mcp:
-            print(format_hermes_mcp_test_summary(run_hermes_mcp_connection_test(cwd=install_args.cwd)))
+            print(format_hermes_mcp_test_summary(run_hermes_mcp_connection_test(cwd=install_args.cwd, hermes_home=install_args.hermes_home)))
             return
         summary = run_install(
             cwd=install_args.cwd,
@@ -655,6 +656,7 @@ def main():
             skip_mcp_register=install_args.skip_mcp_register,
             skip_codex=install_args.skip_codex,
             skip_agent_learner=install_args.skip_agent_learner,
+            hermes_home=install_args.hermes_home,
         )
         print(format_install_summary(summary))
         return
